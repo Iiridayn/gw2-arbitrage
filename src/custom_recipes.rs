@@ -56,6 +56,22 @@ static BLACKLIST_ITEM_IDS: phf::Set<u32> = phf_set! {
     87512_u32, // Swim-Speed Infusion +23
     87527_u32, // Swim-Speed Infusion +24
     87502_u32, // Swim-Speed Infusion +25
+
+    // Purchase restrictions the API doesn't expose:
+    82376_u32, // Zunja's Necklace; once per account
+    // Mist Champion skins; need the champion unlocked, and can't be bought once the skin is used
+    72077_u32, // Shadow Assassin Nika
+    72772_u32, // Rogue Grymm Svaard
+    73002_u32, // Sneakthief Nika
+    73989_u32, // Priory Grymm Svaard
+    74423_u32, // Flamewalker Grymm Svaard
+    74686_u32, // Phalanx Turai Ossa
+    76274_u32, // Strider's Nika
+    76461_u32, // Rampart Turai Ossa
+    76488_u32, // Radiant Turai Ossa
+    77684_u32, // Steampunk Tybalt
+    77691_u32, // Elite Glorious Tybalt
+    77704_u32, // Orrian Armor Tybalt
 };
 
 #[derive(Debug, Deserialize)]
