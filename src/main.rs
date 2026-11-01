@@ -33,9 +33,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Loading recipes");
     let api_recipes = {
-        let mut api_recipes: Vec<api::Recipe> = request::get_data(&CONFIG.api_recipes_file, || {
-            request::request_paginated("recipes", &None, notify)
-        })
+        let mut api_recipes: Vec<api::Recipe> = request::get_data(
+            &CONFIG.api_recipes_file,
+            request::API_RECIPES_MIN_TIMESTAMP,
+            || request::request_paginated("recipes", &None, notify),
+        )
         .await?;
         // If a recipe has no disciplines it cannot be crafted or discovered.
         // This appears to be used to mark deprecated recipes in the API.
@@ -49,9 +51,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("Loading custom recipes");
-    let custom_recipes: Vec<Recipe> = request::get_data(&CONFIG.custom_recipes_file, || {
-        custom_recipes::fetch_custom_recipes(notify)
-    })
+    let custom_recipes: Vec<Recipe> = request::get_data(
+        &CONFIG.custom_recipes_file,
+        request::CUSTOM_RECIPES_MIN_TIMESTAMP,
+        || custom_recipes::fetch_custom_recipes(notify),
+    )
     .await
     .unwrap_or_else(|e| {
         eprintln!("Failed to fetch custom recipes: {}", e);
@@ -64,14 +68,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("Loading items");
-    let items: Vec<Item> = request::get_data(&CONFIG.items_file, || async {
-        let api_items: Vec<api::ApiItem> =
-            request::request_paginated("items", &CONFIG.lang, notify).await?;
-        Ok(api_items
-            .into_iter()
-            .map(|api_item| Item::from(api_item))
-            .collect())
-    })
+    let items: Vec<Item> = request::get_data(
+        &CONFIG.items_file,
+        request::ITEMS_MIN_TIMESTAMP,
+        || async {
+            let api_items: Vec<api::ApiItem> =
+                request::request_paginated("items", &CONFIG.lang, notify).await?;
+            Ok(api_items
+                .into_iter()
+                .map(|api_item| Item::from(api_item))
+                .collect())
+        },
+    )
     .await?;
     println!(
         "Loaded {} items stored at '{}'",

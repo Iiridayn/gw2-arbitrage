@@ -10,13 +10,19 @@ use serde_json;
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{metadata, File};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::{Duration, UNIX_EPOCH};
 
 use crate::config;
+
+// Data files older than these unix timestamps are re-fetched; bump to refresh existing users
+pub const API_RECIPES_MIN_TIMESTAMP: u64 = 1793535619;
+pub const CUSTOM_RECIPES_MIN_TIMESTAMP: u64 = 1793535619;
+pub const ITEMS_MIN_TIMESTAMP: u64 = 1793535619;
 
 const PARALLEL_REQUESTS: usize = 10;
 const MAX_PAGE_SIZE: i32 = 200; // https://wiki.guildwars2.com/wiki/API:2#Paging
@@ -42,6 +48,7 @@ pub async fn fetch_item_listings(
 
 pub async fn get_data<T, Fut>(
     data_path: impl AsRef<Path>,
+    min_timestamp: u64,
     getter: impl FnOnce() -> Fut,
 ) -> Result<Vec<T>, Box<dyn std::error::Error>>
 where
@@ -49,26 +56,36 @@ where
     T: serde::de::DeserializeOwned,
     Fut: Future<Output = Result<Vec<T>, Box<dyn std::error::Error>>>,
 {
-    if let Ok(file) = File::open(&data_path) {
-        let stream = DeflateDecoder::new(file);
-        deserialize_from(stream).map_err(|e| {
-            format!(
-                "Failed to deserialize existing data at '{}' ({}). \
-                 Try using the --reset-data flag to replace the data files.",
+    let modified = metadata(&data_path).and_then(|m| m.modified()).ok();
+    let min_time = UNIX_EPOCH + Duration::from_secs(min_timestamp);
+
+    if modified.map_or(true, |time| time < min_time) {
+        match getter().await {
+            Ok(items) => {
+                let file = File::create(&data_path)?;
+                let stream = DeflateEncoder::new(file, Compression::default());
+                serialize_into(stream, &items)?;
+                return Ok(items);
+            }
+            Err(e) if modified.is_none() => return Err(e),
+            Err(e) => eprintln!(
+                "Failed to refresh '{}', using the existing copy: {}",
                 data_path.as_ref().display(),
-                e,
-            )
-            .into()
-        })
-    } else {
-        let items = getter().await?;
-
-        let file = File::create(data_path)?;
-        let stream = DeflateEncoder::new(file, Compression::default());
-        serialize_into(stream, &items)?;
-
-        Ok(items)
+                e
+            ),
+        }
     }
+
+    let stream = DeflateDecoder::new(File::open(&data_path)?);
+    deserialize_from(stream).map_err(|e| {
+        format!(
+            "Failed to deserialize existing data at '{}' ({}). \
+             Try using the --reset-data flag to replace the data files.",
+            data_path.as_ref().display(),
+            e,
+        )
+        .into()
+    })
 }
 
 pub async fn request_paginated<T>(
