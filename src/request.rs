@@ -6,13 +6,16 @@ use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use futures::{stream, StreamExt};
+use once_cell::sync::Lazy;
+use reqwest::header::HeaderMap;
+use reqwest::StatusCode;
 use serde_json;
 
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::{DefaultHasher, RandomState};
 use std::collections::HashSet;
 use std::fs::{metadata, File};
 use std::future::Future;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
@@ -25,8 +28,18 @@ pub const CUSTOM_RECIPES_MIN_TIMESTAMP: u64 = 1793535619;
 pub const ITEMS_MIN_TIMESTAMP: u64 = 1793535619;
 
 const PARALLEL_REQUESTS: usize = 10;
+const MAX_ATTEMPTS: u32 = 4;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_PAGE_SIZE: i32 = 200; // https://wiki.guildwars2.com/wiki/API:2#Paging
 const MAX_ITEM_ID_LENGTH: i32 = 200; // error returned for greater than this amount
+
+// Shared so requests reuse connections
+static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .expect("Failed to build HTTP client")
+});
 
 pub async fn fetch_item_listings(
     item_ids: &[u32],
@@ -150,10 +163,13 @@ where
     if let Some(notify) = notify {
         notify(&url);
     }
-    let response = reqwest::get(&url).await?;
+    let (headers, body) = match get(&url).await {
+        Ok(response) => response,
+        Err(e) if e.to_string().contains("page out of range") => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
     if page_total.is_none() {
-        let page_total_str = response
-            .headers()
+        let page_total_str = headers
             .get("X-Page-Total")
             .expect("Missing X-Page-Total header")
             .to_str()
@@ -164,12 +180,7 @@ where
             }));
     }
 
-    let txt = response.text().await?;
-    if txt.contains("page out of range") {
-        return Ok(vec![]);
-    }
-    let de = &mut serde_json::Deserializer::from_str(&txt);
-    serde_path_to_error::deserialize(de).map_err(|e| e.into())
+    parse(&url, &body)
 }
 
 pub async fn request_item_ids<T>(
@@ -182,9 +193,7 @@ where
     T: serde::Serialize,
     T: serde::de::DeserializeOwned,
 {
-    let mut result = vec![];
-
-    for batch in item_ids.chunks(MAX_ITEM_ID_LENGTH as usize) {
+    let requests = item_ids.chunks(MAX_ITEM_ID_LENGTH as usize).map(|batch| {
         let item_ids_str: Vec<String> = batch.iter().map(|id| id.to_string()).collect();
 
         let url = format!(
@@ -192,15 +201,23 @@ where
             url_path,
             item_ids_str.join(",")
         );
-        if let Some(cache_dir) = cache_dir {
-            result.extend(
-                cached_fetch::<Vec<T>>(&url, cache_dir, notify)
-                    .await?
-                    .into_iter(),
-            );
-        } else {
-            result.extend(fetch::<Vec<T>>(&url, None).await?.into_iter());
+        async move {
+            if let Some(cache_dir) = cache_dir {
+                cached_fetch::<Vec<T>>(&url, cache_dir, notify).await
+            } else {
+                fetch::<Vec<T>>(&url, None).await
+            }
         }
+    });
+    let request_results = stream::iter(requests)
+        .buffered(PARALLEL_REQUESTS)
+        .collect::<Vec<Result<Vec<T>, Box<dyn std::error::Error>>>>()
+        .await;
+
+    let mut result = vec![];
+    for batch in request_results.into_iter() {
+        let mut new_items = batch?;
+        result.append(&mut new_items);
     }
 
     Ok(result)
@@ -248,31 +265,85 @@ where
     Ok(v)
 }
 
-async fn fetch<T>(url: &str, notify: Option<&dyn Fn(&str)>) -> Result<T, Box<dyn std::error::Error>>
+pub async fn fetch<T>(
+    url: &str,
+    notify: Option<&dyn Fn(&str)>,
+) -> Result<T, Box<dyn std::error::Error>>
 where
-    T: serde::Serialize,
     T: serde::de::DeserializeOwned,
 {
     if let Some(notify) = notify {
         notify(&url.to_string());
     }
 
-    let response = reqwest::get(url).await?;
-    let status = response.status();
-    if !status.is_success() {
-        let err: serde_json::value::Value = response.json().await?;
-        let text = err
-            .get("text")
-            .and_then(|text| text.as_str())
-            .unwrap_or_else(|| status.as_str());
-        return Err(text.into());
+    let (_, body) = get(url).await?;
+    parse(url, &body)
+}
+
+/// GET a url, retrying failures which may be temporary. Errors leave out the query string, since
+/// it may contain the API key.
+async fn get(url: &str) -> Result<(HeaderMap, Vec<u8>), Box<dyn std::error::Error>> {
+    let mut attempt = 1;
+    loop {
+        let failure = match CLIENT.get(url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                let headers = response.headers().clone();
+                match response.bytes().await {
+                    Ok(body) if status.is_success() && !body.is_empty() => {
+                        return Ok((headers, body.to_vec()));
+                    }
+                    Ok(_) if status.is_success() => "empty response".to_string(),
+                    Ok(body) => {
+                        let text = error_text(status, &body);
+                        if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
+                            return Err(format!("{}: {}", endpoint(url), text).into());
+                        }
+                        text
+                    }
+                    Err(e) => e.without_url().to_string(),
+                }
+            }
+            Err(e) => e.without_url().to_string(),
+        };
+
+        if attempt >= MAX_ATTEMPTS {
+            return Err(format!("{}: {}", endpoint(url), failure).into());
+        }
+        eprintln!(
+            "{}: {}; retrying ({}/{})",
+            endpoint(url),
+            failure,
+            attempt,
+            MAX_ATTEMPTS - 1
+        );
+        tokio::time::sleep(Duration::from_millis(
+            RandomState::new().build_hasher().finish() % (1000u64 << attempt),
+        ))
+        .await;
+        attempt += 1;
     }
+}
 
-    let bytes = response.bytes().await?;
-    let de = &mut serde_json::Deserializer::from_slice(&bytes);
-    let v: T = serde_path_to_error::deserialize(de)?;
+fn parse<T>(url: &str, body: &[u8]) -> Result<T, Box<dyn std::error::Error>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let de = &mut serde_json::Deserializer::from_slice(body);
+    serde_path_to_error::deserialize(de)
+        .map_err(|e| format!("{}: {}", endpoint(url), e).into())
+}
 
-    Ok(v)
+/// The API's message for a failed request, if it sent one
+fn error_text(status: StatusCode, body: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|error| error.get("text")?.as_str().map(str::to_string))
+        .unwrap_or_else(|| status.to_string())
+}
+
+fn endpoint(url: &str) -> &str {
+    url.split('?').next().unwrap_or(url)
 }
 
 fn url_to_cache_path(url: &str, cache_dir: &Path) -> PathBuf {

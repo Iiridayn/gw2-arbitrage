@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::config;
 use crate::recipe;
+use crate::request;
 
 use std::convert::TryFrom;
 use std::str::FromStr;
@@ -101,11 +102,7 @@ pub async fn fetch_custom_recipes(
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<Vec<recipe::Recipe>, Box<dyn std::error::Error>> {
     let url = "https://raw.githubusercontent.com/Peureki/custom-recipes/refs/heads/schema-update/recipes.json";
-    if let Some(notify) = notify {
-        notify(&url);
-    }
-
-    let custom_recipes: Vec<Recipe> = reqwest::get(url).await?.json().await?;
+    let custom_recipes: Vec<Recipe> = request::fetch(url, notify).await?;
 
     let recipes: Vec<recipe::Recipe> = custom_recipes
         .into_iter()

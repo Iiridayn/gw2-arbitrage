@@ -158,7 +158,12 @@ pub async fn calc_item_profit(
         let prices: Vec<api::Price> =
             request::request_item_ids("commerce/prices", &recipe_items, None, notify)
                 .await
-                .unwrap_or(Default::default()); // ignore "all ids provided are invalid" (and all other errors)
+                .unwrap_or_else(|e| {
+                    if !e.to_string().contains("all ids provided are invalid") {
+                        eprintln!("Failed to fetch recipe prices: {}", e);
+                    }
+                    Default::default()
+                });
         recipe_prices = vec_to_map(prices, |x| x.id);
     }
 
