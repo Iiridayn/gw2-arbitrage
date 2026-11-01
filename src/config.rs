@@ -411,6 +411,7 @@ pub enum Discipline {
     Charge,
     Achievement,
     Growing,
+    Homesteader,
 }
 
 impl Discipline {
