@@ -40,7 +40,7 @@ pub fn calculate_estimated_min_crafting_cost(
         if !opt.include_timegated && recipe.is_timegated() {
             None
         } else {
-            let mut cost = Money::zero();
+            let mut cost = recipe.currency_cost()?;
             for ingredient in &recipe.ingredients {
                 let ingredient_cost = calculate_estimated_min_crafting_cost(
                     ingredient.item_id,
@@ -274,7 +274,7 @@ pub fn calculate_precise_min_crafting_cost(
             return None;
         }
 
-        let mut cost = Money::zero();
+        let mut cost = recipe.currency_cost()? * crafting_count;
         for ingredient in &recipe.ingredients {
             // adjust ingredient count based on fraction of parent recipe that was requested
             let ingredient_count = ingredient.count * crafting_count;

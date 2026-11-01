@@ -59,6 +59,18 @@ impl Money {
             ..Default::default()
         }
     }
+    /// None if the currency has no copper value: untracked, or its rate isn't configured.
+    pub fn from_currency(currency_id: u32, count: u32) -> Option<Self> {
+        let count = count as i32;
+        match currency_id {
+            1 => Some(Self::from_copper(count)),
+            2 if CONFIG.karma != None => Some(Self::from_karma(count)),
+            32 if CONFIG.um != None => Some(Self::from_um(count)),
+            45 if CONFIG.vm != None => Some(Self::from_vm(count)),
+            61 if CONFIG.rn != None => Some(Self::from_rn(count)),
+            _ => None,
+        }
+    }
     pub fn new(copper: i32, karma: i32, um: i32, vm: i32, rn: i32) -> Self {
         Self {
             copper: Rational32::from(copper),

@@ -1,6 +1,7 @@
 use crate::api;
 use crate::config;
 use crate::custom_recipes;
+use crate::money::Money;
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -16,6 +17,12 @@ pub enum RecipeSource {
     Achievement,
 }
 
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub struct CurrencyCost {
+    pub currency_id: u32, // id from /v2/currencies
+    pub count: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Recipe {
     pub id: Option<u32>,
@@ -23,6 +30,7 @@ pub struct Recipe {
     pub output_item_count: u32,
     pub disciplines: Vec<config::Discipline>,
     pub ingredients: Vec<api::RecipeIngredient>,
+    pub currencies: Vec<CurrencyCost>,
     source: RecipeSource,
 }
 
@@ -41,6 +49,7 @@ impl From<api::Recipe> for Recipe {
             output_item_count: recipe.output_item_count,
             disciplines: recipe.disciplines,
             ingredients: recipe.ingredients,
+            currencies: vec![],
             source,
         }
     }
@@ -71,18 +80,43 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
         } else {
             RecipeSource::Automatic
         };
+        let mut ingredients = vec![];
+        let mut currencies = vec![];
+        for ingredient in recipe.ingredients {
+            match ingredient {
+                custom_recipes::Ingredient::Item { id, count } => {
+                    ingredients.push(api::RecipeIngredient { item_id: id, count })
+                }
+                custom_recipes::Ingredient::Currency { id, count } => {
+                    currencies.push(CurrencyCost {
+                        currency_id: id,
+                        count,
+                    })
+                }
+            }
+        }
         Ok(Recipe {
             id: None,
             output_item_id: recipe.output_item_id,
             output_item_count,
             disciplines: recipe.disciplines,
-            ingredients: recipe.ingredients,
+            ingredients,
+            currencies,
             source,
         })
     }
 }
 
 impl Recipe {
+    /// Total currency cost of one craft. None if any currency has no copper value.
+    pub fn currency_cost(&self) -> Option<Money> {
+        let mut cost = Money::default();
+        for currency in &self.currencies {
+            cost += Money::from_currency(currency.currency_id, currency.count)?;
+        }
+        Some(cost)
+    }
+
     // see https://wiki.guildwars2.com/wiki/Category:Time_gated_recipes
     // for a list of time gated recipes
     // I've left Charged Quartz Crystals off the list, since they can
@@ -161,312 +195,6 @@ impl Recipe {
                 recipe.collect_unknown_recipe_ids(&recipes_map, &known_recipes, unknown_recipes);
             }
         }
-    }
-
-    pub fn additional_recipes() -> Vec<Recipe> {
-        vec![
-            // Piece of Dragon Jade
-            Recipe {
-                id: None,
-                output_item_id: 97487u32,
-                output_item_count: 1,
-                disciplines: vec![
-                    config::Discipline::Armorsmith,
-                    config::Discipline::Artificer,
-                    config::Discipline::Huntsman,
-                    config::Discipline::Jeweler,
-                    config::Discipline::Leatherworker,
-                    config::Discipline::Tailor,
-                    config::Discipline::Weaponsmith,
-                ],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 97102u32,
-                        count: 4,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 30,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19721u32,
-                        count: 2,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19685u32,
-                        count: 5,
-                    },
-                ],
-                source: RecipeSource::Automatic,
-            },
-            // Jade Bot Core Tier 1-10
-            Recipe {
-                id: None,
-                output_item_id: 97339u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 3,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19679u32,
-                        count: 5,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 97041u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 97339u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 10,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19680u32,
-                        count: 10,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 97284u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 97041u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 20,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19683u32,
-                        count: 25,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 96628u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 97284u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 30,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19687u32,
-                        count: 25,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 95864u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 96628u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 50,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19688u32,
-                        count: 25,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 96467u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 95864u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 80,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19682u32,
-                        count: 25,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 97020u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 96467u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 130,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19686u32,
-                        count: 25,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 96299u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 97020u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 210,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19684u32,
-                        count: 50,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 96070u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 96299u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 340,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 19685u32,
-                        count: 15,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            Recipe {
-                id: None,
-                output_item_id: 96613u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Jeweler],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 96070u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 96052u32,
-                        count: 550,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 46743u32,
-                        count: 1,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 97487u32,
-                        count: 2,
-                    },
-                ],
-                source: RecipeSource::Purchasable,
-            },
-            // TODO: general vendor interface, for money+item purchases, so I can avoid faking it
-            // w/currency items
-            // Bottle of Coconut Milk
-            Recipe {
-                id: None,
-                output_item_id: 87289u32,
-                output_item_count: 1,
-                disciplines: vec![config::Discipline::Merchant],
-                ingredients: vec![
-                    api::RecipeIngredient {
-                        item_id: 38030u32, // karma
-                        count: 249,
-                    },
-                    api::RecipeIngredient {
-                        item_id: 86977u32, // Difluorite crystal
-                        count: 1,
-                    },
-                ],
-                source: RecipeSource::Automatic,
-            },
-        ]
     }
 }
 

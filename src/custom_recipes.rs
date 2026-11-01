@@ -1,13 +1,18 @@
 use serde::{de::Deserializer, Deserialize};
 use serde_json::Value;
 
-use crate::api;
 use crate::config;
 use crate::recipe;
 
+use std::convert::TryFrom;
 use std::str::FromStr;
 
 use phf::phf_set;
+
+// Alternate recipes encode their output as this plus the real item id
+const ALTERNATE_RECIPE_ID_OFFSET: u64 = 1_000_000_000_000;
+
+const ADDITIONAL_RECIPES: &str = include_str!("../data/additional-recipes.json");
 
 // Bad recipes; blacklist based on item ID
 static BLACKLIST_ITEM_IDS: phf::Set<u32> = phf_set! {
@@ -54,14 +59,26 @@ static BLACKLIST_ITEM_IDS: phf::Set<u32> = phf_set! {
 };
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum Ingredient {
+    Item { id: u32, count: u32 },
+    Currency { id: u32, count: u32 },
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Recipe {
     pub name: String, // used only in error output
+    #[serde(deserialize_with = "real_item_id")]
     pub output_item_id: u32,
     #[serde(deserialize_with = "treat_error_as_none")]
     pub output_item_count: Option<u32>,
     #[serde(deserialize_with = "strum_discipline")]
     pub disciplines: Vec<config::Discipline>,
-    pub ingredients: Vec<api::RecipeIngredient>,
+    pub ingredients: Vec<Ingredient>,
+}
+
+pub fn additional_recipes() -> serde_json::Result<Vec<Recipe>> {
+    serde_json::from_str(ADDITIONAL_RECIPES)
 }
 
 pub async fn fetch_custom_recipes(
@@ -76,6 +93,7 @@ pub async fn fetch_custom_recipes(
 
     let recipes: Vec<recipe::Recipe> = custom_recipes
         .into_iter()
+        .chain(additional_recipes()?)
         // Remove blacklisted recipes here to avoid printing errors for non-integers
         .filter(|r| !BLACKLIST_ITEM_IDS.contains(&r.output_item_id))
         .map(std::convert::TryFrom::try_from)
@@ -89,6 +107,16 @@ pub async fn fetch_custom_recipes(
         .collect();
 
     Ok(recipes)
+}
+
+fn real_item_id<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let id = u64::deserialize(deserializer)?;
+    u32::try_from(id % ALTERNATE_RECIPE_ID_OFFSET).map_err(Error::custom)
 }
 
 fn treat_error_as_none<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>

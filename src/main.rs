@@ -79,11 +79,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         CONFIG.items_file.display()
     );
 
-    let mut recipes: Vec<Recipe> = custom_recipes
+    let recipes: Vec<Recipe> = custom_recipes
         .into_iter()
         // prefer api recipes over custom recipes if they share the same output item id, by inserting them later
         .chain(api_recipes.into_iter().map(std::convert::From::from))
         .filter(|recipe| {
+            // Profit can't be calculated unless all of the recipe's currencies have a copper value
+            if recipe.currency_cost().is_none() {
+                return false;
+            }
             if let Some(recipe_blacklist) = &CONFIG.recipe_blacklist {
                 if let Some(id) = recipe.id {
                     if recipe_blacklist.contains(&id) {
@@ -102,7 +106,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             true
         })
         .collect();
-    recipes.append(&mut Recipe::additional_recipes());
     let mut recipes_map = profit::vec_to_map(recipes, |x| x.output_item_id);
     let items_map = profit::vec_to_map(items, |x| x.id);
 
@@ -325,7 +328,7 @@ fn print_profitable_item(
         let item_name = items_map
             .get(&item_id)
             .map_or_else(|| "???".to_string(), |item| item.to_string());
-        let ingredients = recipe
+        let mut ingredients = recipe
             .sorted_ingredients()
             .iter()
             .map(|ingredient| {
@@ -334,8 +337,13 @@ fn print_profitable_item(
                     .map_or_else(|| "???".to_string(), |item| item.to_string());
                 format!("{} {}", ingredient.count * num_crafted, ingredient_name)
             })
-            .collect::<Vec<String>>()
-            .join(" ");
+            .collect::<Vec<String>>();
+        if !recipe.currencies.is_empty() {
+            if let Some(cost) = recipe.currency_cost() {
+                ingredients.push((cost * num_crafted).to_string());
+            }
+        }
+        let ingredients = ingredients.join(" ");
         if recipe.output_item_count > 1 {
             println!(
                 "{} (makes {}) {} from {}",

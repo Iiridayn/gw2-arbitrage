@@ -2,6 +2,7 @@ use gw2_arbitrage::{
     api::{self, ItemListings, Listing, RecipeIngredient},
     config::Discipline,
     crafting::{self, CraftedItems, PurchasedIngredient},
+    custom_recipes,
     item::Item,
     money::Money,
     profit::{calculate_crafting_profit, ProfitableItem},
@@ -9,6 +10,64 @@ use gw2_arbitrage::{
 };
 
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
+
+#[test]
+fn custom_recipe_splits_item_and_currency_ingredients() {
+    let custom: custom_recipes::Recipe = serde_json::from_str(
+        r#"{
+            "name": "Triumphant Hero's Masque",
+            "output_item_id": 81476,
+            "output_item_count": 1,
+            "ingredients": [
+                {"count": 175, "type": "Currency", "id": 26},
+                {"count": 250, "type": "Item", "id": 71581},
+                {"count": 20000, "type": "Currency", "id": 1}
+            ],
+            "disciplines": ["Merchant"],
+            "merchant_data_hash": "xosflg5"
+        }"#,
+    )
+    .unwrap();
+    let recipe = Recipe::try_from(custom).unwrap();
+
+    let items: Vec<_> = recipe
+        .ingredients
+        .iter()
+        .map(|i| (i.item_id, i.count))
+        .collect();
+    let currencies: Vec<_> = recipe
+        .currencies
+        .iter()
+        .map(|c| (c.currency_id, c.count))
+        .collect();
+    assert_eq!(items, vec![(71581, 250)]);
+    assert_eq!(currencies, vec![(26, 175), (1, 20000)]);
+}
+
+#[test]
+fn additional_recipes_parse() {
+    let recipes = custom_recipes::additional_recipes().unwrap();
+    assert_eq!(recipes.len(), 12);
+    for recipe in recipes {
+        Recipe::try_from(recipe).unwrap();
+    }
+}
+
+#[test]
+fn custom_recipe_alternate_output_id_maps_to_real_item() {
+    let custom: custom_recipes::Recipe = serde_json::from_str(
+        r#"{
+            "name": "Eureka (Desert)",
+            "output_item_id": 1000000079562,
+            "output_item_count": 1,
+            "ingredients": [{"count": 1, "type": "Item", "id": 79570}],
+            "disciplines": ["Mystic Forge"]
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(custom.output_item_id, 79562);
+}
 
 trait MockItem {
     fn mock(id: u32, name: &str, vendor_value: u32) -> Self;
