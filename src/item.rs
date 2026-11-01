@@ -72,7 +72,6 @@ pub enum Type {
     UpgradeComponent,
     Weapon,
     Relic,
-    Mwcc, // TODO: From SoTO, will probably be renamed eventually
 }
 
 #[derive(Debug, Serialize, Deserialize, Display)]
