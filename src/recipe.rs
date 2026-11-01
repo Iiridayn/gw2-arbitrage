@@ -1,6 +1,6 @@
 use crate::api;
 use crate::config;
-use crate::gw2efficiency;
+use crate::custom_recipes;
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -46,10 +46,10 @@ impl From<api::Recipe> for Recipe {
     }
 }
 
-impl TryFrom<gw2efficiency::Recipe> for Recipe {
+impl TryFrom<custom_recipes::Recipe> for Recipe {
     type Error = String;
 
-    fn try_from(recipe: gw2efficiency::Recipe) -> Result<Self, Self::Error> {
+    fn try_from(recipe: custom_recipes::Recipe) -> Result<Self, Self::Error> {
         let output_item_count = if let Some(count) = recipe.output_item_count {
             count
         } else {

@@ -67,7 +67,7 @@ pub struct Recipe {
 pub async fn fetch_custom_recipes(
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<Vec<recipe::Recipe>, Box<dyn std::error::Error>> {
-    let url = "https://raw.githubusercontent.com/gw2efficiency/custom-recipes/master/recipes.json";
+    let url = "https://raw.githubusercontent.com/Peureki/custom-recipes/refs/heads/schema-update/recipes.json";
     if let Some(notify) = notify {
         notify(&url);
     }

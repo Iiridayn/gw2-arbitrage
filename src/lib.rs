@@ -1,7 +1,7 @@
 pub mod api;
 pub mod config;
 pub mod crafting;
-pub mod gw2efficiency;
+pub mod custom_recipes;
 pub mod item;
 pub mod money;
 pub mod profit;

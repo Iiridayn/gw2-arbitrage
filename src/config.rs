@@ -401,7 +401,7 @@ pub enum Discipline {
     Tailor,
     Weaponsmith,
     Scribe,
-    // A few more for compatibility with gw2efficiency
+    // A few more for compatibility with custom recipes
     #[strum(serialize = "Mystic Forge")]
     MysticForge,
     #[strum(serialize = "Double Click")]

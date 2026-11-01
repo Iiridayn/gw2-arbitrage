@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Loading custom recipes");
     let custom_recipes: Vec<Recipe> = request::get_data(&CONFIG.custom_recipes_file, || {
-        gw2efficiency::fetch_custom_recipes(notify)
+        custom_recipes::fetch_custom_recipes(notify)
     })
     .await
     .unwrap_or_else(|e| {
