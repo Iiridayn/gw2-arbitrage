@@ -76,13 +76,13 @@ pub fn calculate_estimated_min_crafting_cost(
     });
     let cost = tp_cost.inner_min(crafting_cost).inner_min(vendor_cost)?;
 
-    // give trading post precedence over crafting if costs are equal
+    // if costs are equal, prefer the trading post, then the vendor, then crafting
     let source = if tp_cost == Some(cost) {
         Source::TradingPost
-    } else if crafting_cost == Some(cost) {
-        Source::Crafting
-    } else {
+    } else if vendor_cost == Some(cost) {
         Source::Vendor
+    } else {
+        Source::Crafting
     };
 
     Some(EstimatedCraftingCost { cost, source })
@@ -335,13 +335,13 @@ pub fn calculate_precise_min_crafting_cost(
     };
     let cost = tp_cost.inner_min(crafting_cost).inner_min(vendor_cost)?;
 
-    // give trading post precedence over crafting if costs are equal
+    // if costs are equal, prefer the trading post, then the vendor, then crafting
     let source = if tp_cost == Some(cost) {
         Source::TradingPost
-    } else if crafting_cost == Some(cost) {
-        Source::Crafting
-    } else {
+    } else if vendor_cost == Some(cost) {
         Source::Vendor
+    } else {
+        Source::Crafting
     };
 
     if source == Source::Crafting {
