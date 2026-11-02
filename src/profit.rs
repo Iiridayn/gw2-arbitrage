@@ -12,6 +12,9 @@ use crate::recipe::Recipe;
 use crate::request;
 use config::CONFIG;
 
+const SPARKLINE_SLICES: usize = 8;
+const SPARKLINE_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
 /// Return a items which are profitable to make at least one of, and their ingredients, for further
 /// scrutiny
 pub fn find_profitable_items(
@@ -128,6 +131,7 @@ pub async fn calc_item_profit(
         HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
         Vec<u32>,
         HashMap<u32, api::Price>,
+        HashMap<u32, api::ItemListings>,
     ),
     Box<dyn std::error::Error>,
 > {
@@ -212,6 +216,7 @@ pub async fn calc_item_profit(
         purchased_ingredients,
         required_unknown_recipes,
         recipe_prices,
+        tp_listings_map,
     ))
 }
 
@@ -533,6 +538,65 @@ impl From<api::ItemListings> for ItemListings {
             pending_buy_quantity: 0,
         }
     }
+}
+
+/// Money traded taking `count` from `listings` best price first, as bars across the price range.
+/// The bar after the `|` is the value left from the last price to one slice past it, on the same
+/// scale. Works on both sides of the book: buying from sells or selling into buys.
+pub fn listing_sparkline(listings: &[api::Listing], count: u32) -> String {
+    let mut taken = vec![];
+    let mut remaining = vec![];
+    let mut to_take = count;
+    // listings are reversed so the best price is last
+    for listing in listings.iter().rev() {
+        let quantity = listing.quantity.min(to_take);
+        to_take -= quantity;
+        if quantity > 0 {
+            taken.push((listing.unit_price, quantity));
+        }
+        if listing.quantity > quantity {
+            remaining.push((listing.unit_price, listing.quantity - quantity));
+        }
+    }
+
+    let (best, last) = match (taken.first(), taken.last()) {
+        (Some(best), Some(last)) => (best.0 as f64, last.0 as f64),
+        _ => return String::new(),
+    };
+    let range = (last - best).abs();
+    // prices are whole copper, so there's no point in slices narrower than 1c
+    let slices = (range as usize + 1).min(SPARKLINE_SLICES);
+
+    let mut bars = vec![0.0; slices];
+    for &(price, quantity) in &taken {
+        let price = price as f64;
+        let position = if range > 0.0 {
+            (price - best).abs() / range
+        } else {
+            0.0
+        };
+        let slice = (position * slices as f64) as usize;
+        bars[slice.min(slices - 1)] += price * quantity as f64;
+    }
+
+    let continuation_reach = (range / slices as f64).max(last * 0.01).max(1.0);
+    let continuation: f64 = remaining
+        .iter()
+        .filter(|listing| (listing.0 as f64 - last).abs() <= continuation_reach)
+        .map(|listing| listing.0 as f64 * listing.1 as f64)
+        .sum();
+
+    let tallest = bars.iter().cloned().fold(0.0, f64::max);
+    let top_level = SPARKLINE_BARS.len() - 1;
+    let bar = |value: f64| {
+        let level = (value / tallest * top_level as f64).round() as usize;
+        SPARKLINE_BARS[level.min(top_level)]
+    };
+
+    let mut sparkline: String = bars.iter().map(|&value| bar(value)).collect();
+    sparkline.push('|');
+    sparkline.push(bar(continuation));
+    sparkline
 }
 
 pub fn vec_to_map<T, F>(v: Vec<T>, id_fn: F) -> HashMap<u32, T>

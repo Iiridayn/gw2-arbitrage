@@ -28,6 +28,8 @@ The shopping list will also include items that should be purchased from crafting
     By default the shopping list will assume that you want to produce as many copies of the item as can be profitably sold on the trading post.
     To limit the number of items that will be crafted a count may also be passed (e.g. `gw2-arbitrage.exe 11538 --count 100` will limit the shopping list to producing 100 items).
 
+    The small charts on the "Sell at" line and on ingredients bought from the trading post are explained in [Sparklines](#sparklines).
+
 1. Detailed crafting instructions for the item can then be found on https://gw2efficiency.com/crafting/calculator/ or https://www.gw2bltc.com/, with the caveat that these sites do not account for [liquidity](#effects-of-low-liquidity) when crafting large amounts of items. This means that the shopping list and profits shown will not always be accurate, and you may need to adapt the crafting instructions to use exactly the ingredients printed by this tool.
 
 **Important**: Check that you have the recipe for the item before spending any money. Some profitable opportunities listed by the tool exist because the recipes are difficult to obtain.
@@ -43,6 +45,27 @@ This is because the tool considers your effect on the market when you buy materi
 For example, after buying enough Bolts of Silk and Thread to craft 100 x Trouser Padding, you may push the price of the materials high enough that it becomes cheaper to simply buy the Trouser Padding already crafted.
 Similarly, the tool considers your effect on the market when you sell many items.
 Although most existing tools ignore this effect, not accounting for it results in overestimating profits when crafting and selling large amounts of items.
+
+## Sparklines
+
+The shopping list shows a small chart such as `█▄▁▁▁▁▁▂|█` on the "Sell at" line and on each ingredient bought from the trading post.
+It shows the shape of this one trade, not price history.
+
+The bars before the `|` cover the price range of the trade, best price first: lowest to highest for ingredients, and highest to lowest for the "Sell at" line.
+Each bar's height is the money spent or earned in that part of the range, relative to the tallest bar, and the lowest bar can mean little or nothing.
+There are up to 8 bars, and fewer when the range is only a few copper. A trade at a single price has one bar.
+
+The bar after the `|` uses the same scale and shows what is left just past the last price, within about one more bar's width of the range.
+For ingredients this is the stock for sale just above the highest price you pay.
+On the "Sell at" line it is the buy orders just below the point where crafting stops being profitable, or where `--count` stopped it.
+
+- Bars heavy on the left: most of the trade happens near the best price and little is available after that. For ingredients, the supply is limited, so the cheap stock may be gone before you buy it.
+- Bars flat or heavy on the right: there is plenty available across the range, or you are buying an exact lot.
+- Low bar after the `|`: there is a gap, so the price moves sharply if you need more.
+- High bar after the `|`: there is more available at about the same price, so a small change in the market is less of a concern.
+- "Sell at" bars heavy on the left: most of the profit comes from the first items sold, so you can get most of it for much less crafting time. Either check the buy orders and set the amount yourself with `--count`, or use `--min-per-item` to stop at the first item that would earn too little (e.g. `--min-per-item 1000` stops below 10 silver per item). One large buy order can disappear before you finish, so check the market either way.
+
+The "Sell at" chart is not shown with `--value`, which replaces the buy orders with a fixed price.
 
 ## Cache
 

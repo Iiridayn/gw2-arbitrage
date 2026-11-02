@@ -123,15 +123,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(item_id) = CONFIG.item_id {
-        let (profitable_item, purchased_ingredients, required_unknown_recipes, recipe_prices) =
-            profit::calc_item_profit(item_id, &recipes_map, &items_map, &known_recipes, notify)
-                .await?;
+        let (
+            profitable_item,
+            purchased_ingredients,
+            required_unknown_recipes,
+            recipe_prices,
+            tp_listings_map,
+        ) = profit::calc_item_profit(item_id, &recipes_map, &items_map, &known_recipes, notify)
+            .await?;
         print_profitable_item(
             item_id,
             &profitable_item,
             &purchased_ingredients,
             &required_unknown_recipes,
             &recipe_prices,
+            &tp_listings_map,
             &recipes_map,
             &items_map,
             &known_recipes,
@@ -195,6 +201,7 @@ fn print_profitable_item(
     purchased_ingredients: &HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
     required_unknown_recipes: &Vec<u32>,
     recipe_prices: &HashMap<u32, api::Price>,
+    tp_listings_map: &HashMap<u32, api::ItemListings>,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
     known_recipes: &Option<HashSet<u32>>,
@@ -225,9 +232,18 @@ fn print_profitable_item(
             profitable_item.max_sell, profitable_item.min_sell,
         )
     };
+    // --value replaces the buy orders, so they say nothing about this sale
+    let sale_sparkline = match tp_listings_map.get(&item_id) {
+        Some(listings) if CONFIG.crafting.value.is_none() => format!(
+            " {}",
+            profit::listing_sparkline(&listings.buys, profitable_item.count)
+        ),
+        _ => String::new(),
+    };
     println!(
-        "Sell at: {}, Money Required: {}, Breakeven price: {}",
+        "Sell at: {}{}, Money Required: {}, Breakeven price: {}",
         price_msg,
+        sale_sparkline,
         profitable_item.crafting_cost.increase_by_listing_fee(),
         profitable_item.breakeven,
     );
@@ -281,15 +297,23 @@ fn print_profitable_item(
         };
         let source_msg = match *ingredient_source {
             crafting::Source::TradingPost => {
+                let sparkline = tp_listings_map
+                    .get(ingredient_id)
+                    .map_or_else(String::new, |listings| {
+                        profit::listing_sparkline(&listings.sells, ingredient.count)
+                    });
                 if ingredient.max_price == ingredient.min_price {
                     format!(
-                        " (at {}) Subtotal: {}",
-                        ingredient.min_price, ingredient.total_cost,
+                        " (at {}) Subtotal: {} {}",
+                        ingredient.min_price, ingredient.total_cost, sparkline,
                     )
                 } else {
                     format!(
-                        " (at {} to {}) Subtotal: {}",
-                        ingredient.min_price, ingredient.max_price, ingredient.total_cost,
+                        " (at {} to {}) Subtotal: {} {}",
+                        ingredient.min_price,
+                        ingredient.max_price,
+                        ingredient.total_cost,
+                        sparkline,
                     )
                 }
             }
