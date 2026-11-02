@@ -8,11 +8,9 @@ use std::io::prelude::*;
 
 use config::CONFIG;
 use gw2_arbitrage::*;
-use item::Item;
+use item::{Item, ITEM_STACK_SIZE};
 use money::Money;
 use recipe::Recipe;
-
-const ITEM_STACK_SIZE: u32 = 250; // GW2 uses a "stack size" of 250
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -352,10 +350,13 @@ fn print_profitable_item(
     println!("============");
     println!("Max inventory slots: {}", inventory + 1); // + 1 for the crafting output
     let crafting_seconds = profitable_item.crafted_items.crafting_seconds(&recipes_map);
+    let market_seconds = profitable_item.market_seconds();
     println!(
-        "Crafting time: {} ({} / hour)",
+        "Time: {} ({} crafting, {} market, {} / hour)",
+        format_duration(crafting_seconds + market_seconds),
         format_duration(crafting_seconds),
-        format_profit_per_hour(profitable_item.profit_per_hour(crafting_seconds)),
+        format_duration(market_seconds),
+        profitable_item.profit_per_hour(&recipes_map),
     );
     println!(
         "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
@@ -474,7 +475,8 @@ struct OutputRow {
     crafting_steps: u32,
     profit_per_step: i32,
     crafting_seconds: f64,
-    profit_per_hour: Option<i32>,
+    market_seconds: f64,
+    profit_per_hour: i32,
     profit_on_cost: f64,
 }
 
@@ -490,10 +492,6 @@ fn format_duration(seconds: f64) -> String {
     } else {
         format!("{}:{:02}", seconds / 60, seconds % 60)
     }
-}
-
-fn format_profit_per_hour(profit: Option<Money>) -> String {
-    profit.map_or_else(|| "-".to_string(), |profit| profit.to_string())
 }
 
 /// List profitable items to screen or CSV
@@ -520,7 +518,7 @@ fn print_item_list(
     .cycle();
 
     let header = format!(
-        "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
+        "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
         "Name",
         "Disciplines",
         "Item id",
@@ -531,6 +529,7 @@ fn print_item_list(
         "Crafting steps",
         "Profit / step",
         "Crafting time",
+        "Market time",
         "Profit / hour",
         "Profit on cost",
     );
@@ -554,7 +553,7 @@ fn print_item_list(
         let recipe = recipes_map.get(&item_id).expect("Missing recipe");
 
         let crafting_seconds = profitable_item.crafted_items.crafting_seconds(&recipes_map);
-        let profit_per_hour = profitable_item.profit_per_hour(crafting_seconds);
+        let profit_per_hour = profitable_item.profit_per_hour(&recipes_map);
 
         let output_row = OutputRow {
             name: name.to_string(),
@@ -577,7 +576,8 @@ fn print_item_list(
             crafting_steps: profitable_item.crafting_steps,
             profit_per_step: profitable_item.profit_per_crafting_step().to_copper_value(),
             crafting_seconds,
-            profit_per_hour: profit_per_hour.map(|profit| profit.to_copper_value()),
+            market_seconds: profitable_item.market_seconds(),
+            profit_per_hour: profit_per_hour.to_copper_value(),
             profit_on_cost: profitable_item.profit_on_cost(),
         };
 
@@ -586,7 +586,7 @@ fn print_item_list(
         }
 
         let line = format!(
-            "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
+            "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
             output_row.name,
             output_row.disciplines,
             format!("{}", output_row.item_id),
@@ -613,7 +613,8 @@ fn print_item_list(
             format!("{} steps", output_row.crafting_steps),
             format!("{} / step", output_row.profit_per_step),
             format_duration(output_row.crafting_seconds),
-            format_profit_per_hour(profit_per_hour),
+            format_duration(output_row.market_seconds),
+            profit_per_hour.to_string(),
             format!("{}%", (output_row.profit_on_cost * 100_f64).round())
         );
 

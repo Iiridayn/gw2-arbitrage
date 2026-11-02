@@ -9,6 +9,8 @@ use crate::config;
 use crate::config::CONFIG;
 use crate::money::Money;
 
+pub const ITEM_STACK_SIZE: u32 = 250; // GW2 uses a "stack size" of 250
+
 // types for /items
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Item {

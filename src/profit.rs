@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::api;
 use crate::config;
 use crate::crafting;
-use crate::item::Item;
+use crate::item::{Item, ITEM_STACK_SIZE};
 use crate::money::Money;
 use crate::recipe::Recipe;
 use crate::request;
@@ -14,6 +14,8 @@ use config::CONFIG;
 
 const SPARKLINE_SLICES: usize = 8;
 const SPARKLINE_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+const TP_ACTION_SECONDS: f64 = 5.0;
 
 /// Return a items which are profitable to make at least one of, and their ingredients, for further
 /// scrutiny
@@ -114,7 +116,15 @@ pub fn profitable_item_list(
         })
         .collect();
 
-    profitable_items.sort_unstable_by_key(|item| item.profit);
+    match CONFIG.sort {
+        config::SortBy::Total => profitable_items.sort_unstable_by_key(|item| item.profit),
+        config::SortBy::Step => {
+            profitable_items.sort_unstable_by_key(|item| item.profit_per_crafting_step())
+        }
+        config::SortBy::Hour => {
+            profitable_items.sort_by_cached_key(|item| item.profit_per_hour(recipes_map))
+        }
+    }
 
     profitable_items
 }
@@ -230,6 +240,10 @@ pub fn calculate_crafting_profit(
     >,
     opt: &config::CraftingOptions,
 ) -> Option<ProfitableItem> {
+    let buy_order_quantities: Vec<u32> = tp_listings_map.get(&item_id).map_or_else(Vec::new, |l| {
+        l.buys.iter().map(|listing| listing.quantity).collect()
+    });
+
     let mut tp_listings_map: BTreeMap<u32, ItemListings> = tp_listings_map
         .clone()
         .into_iter()
@@ -242,8 +256,9 @@ pub fn calculate_crafting_profit(
 
     let mut listing_profit = Money::zero();
     let mut total_crafting_cost = Money::zero();
-    let mut crafting_count = 0;
+    let mut crafting_count: u32 = 0;
     let mut crafted_items = crafting::CraftedItems::default();
+    let mut tp_purchases: HashMap<u32, u32> = HashMap::new();
 
     let mut min_sell = 0;
     let max_sell = tp_listings_map.get(&item_id).map_or_else(
@@ -325,6 +340,7 @@ pub fn calculate_crafting_profit(
                         count, purchase_id, item_id
                     )
                 });
+                *tp_purchases.entry(*purchase_id).or_insert(0) += *count;
                 (cost, min_sell, max_sell)
             } else {
                 (0, 0, 0)
@@ -353,6 +369,26 @@ pub fn calculate_crafting_profit(
     }
 
     if crafting_count > 0 && !listing_profit.is_zero() {
+        let buy_actions: u32 = tp_purchases
+            .values()
+            .map(|count| count.div_ceil(ITEM_STACK_SIZE))
+            .sum();
+        let sell_actions: u32 = if opt.value.is_some() {
+            crafting_count.div_ceil(ITEM_STACK_SIZE)
+        } else {
+            // A sale can't span price levels; buys are sorted in ascending price
+            let mut unsold = crafting_count;
+            buy_order_quantities
+                .iter()
+                .rev()
+                .map(|&quantity| {
+                    let sold = quantity.min(unsold);
+                    unsold -= sold;
+                    sold.div_ceil(ITEM_STACK_SIZE)
+                })
+                .sum()
+        };
+
         Some(ProfitableItem {
             id: item_id,
             crafting_cost: total_crafting_cost,
@@ -362,6 +398,7 @@ pub fn calculate_crafting_profit(
             min_sell: Money::from_copper(min_sell as i32),
             breakeven: breakeven.trading_post_listing_price(),
             crafting_steps: crafted_items.crafting_steps(recipes_map).to_integer(),
+            market_actions: buy_actions + sell_actions,
             crafted_items,
         })
     } else {
@@ -379,6 +416,7 @@ pub struct ProfitableItem {
     pub min_sell: Money,
     pub breakeven: Money,
     pub crafting_steps: u32,
+    pub market_actions: u32,
     pub crafted_items: crafting::CraftedItems,
 }
 
@@ -391,14 +429,13 @@ impl ProfitableItem {
         self.profit / self.crafting_steps
     }
 
-    /// None if crafting takes no measured time
-    pub fn profit_per_hour(&self, crafting_seconds: f64) -> Option<Money> {
-        if crafting_seconds > 0.0 {
-            let per_hour = self.profit.to_copper_value() as f64 * 3600.0 / crafting_seconds;
-            Some(Money::from_copper(per_hour as i32))
-        } else {
-            None
-        }
+    pub fn market_seconds(&self) -> f64 {
+        self.market_actions as f64 * TP_ACTION_SECONDS
+    }
+
+    pub fn profit_per_hour(&self, recipes_map: &HashMap<u32, Recipe>) -> Money {
+        let seconds = self.crafted_items.crafting_seconds(recipes_map) + self.market_seconds();
+        Money::from_copper((self.profit.to_copper_value() as f64 * 3600.0 / seconds) as i32)
     }
 
     pub fn profit_on_cost(&self) -> f64 {

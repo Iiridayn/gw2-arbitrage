@@ -32,6 +32,7 @@ pub struct Config {
 
     pub output_csv: Option<PathBuf>,
     pub filter_disciplines: Option<Vec<Discipline>>,
+    pub sort: SortBy,
     pub lang: Option<Language>,
     pub api_key: Option<String>,
 
@@ -73,6 +74,8 @@ impl Config {
         config.item_id = opt.item_id;
 
         config.filter_disciplines = opt.filter_disciplines;
+
+        config.sort = opt.sort.unwrap_or_default();
 
         let file: ConfigFile = match get_file_config(&opt.config_file) {
             Ok(config) => config,
@@ -256,6 +259,10 @@ struct Opt {
     #[structopt(short = "d", long = "disciplines", use_delimiter = true, help = &DISCIPLINES_HELP, parse(try_from_str = get_discipline))]
     filter_disciplines: Option<Vec<Discipline>>,
 
+    /// Sort the item list by one of "total", "step" or "hour" profit. Defaults to "total"
+    #[structopt(long, parse(try_from_str = get_sort))]
+    sort: Option<SortBy>,
+
     /// Download recipes and items from the GW2 API, replacing any previously cached recipes and items
     #[structopt(long)]
     reset_data: bool,
@@ -342,6 +349,28 @@ valid values: {}"#,
         Discipline::VARIANTS.join(", ")
     )
 });
+
+#[derive(Copy, Clone, Debug, Default, EnumString, EnumVariantNames)]
+#[strum(serialize_all = "lowercase")]
+pub enum SortBy {
+    #[default]
+    Total,
+    Step,
+    Hour,
+}
+
+fn get_sort<SortBy: FromStr + VariantNames>(
+    sort: &str,
+) -> Result<SortBy, Box<dyn std::error::Error>> {
+    SortBy::from_str(sort).map_err(|_| {
+        format!(
+            "Invalid sort: {} (valid values are {})",
+            sort,
+            SortBy::VARIANTS.join(", ")
+        )
+        .into()
+    })
+}
 
 #[derive(Debug, EnumString, EnumVariantNames)]
 pub enum Language {

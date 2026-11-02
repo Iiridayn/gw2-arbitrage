@@ -317,6 +317,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
                 + (Money::from_copper(1496) / 10) * 3)
                 .trading_post_listing_price(),
             crafting_steps: 6,
+            market_actions: 4, // 2 ingredients, 2 price levels
             crafted_items: CraftedItems { crafted, leftovers },
         })
     );
@@ -393,6 +394,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             min_sell: Money::from_copper(198),
             breakeven: profitable_item.as_ref().unwrap().breakeven, // inexact, test below
             crafting_steps: 1,
+            market_actions: 5, // 2 ingredients, 3 price levels
             crafted_items: CraftedItems {
                 crafted,
                 leftovers: Default::default(),
@@ -433,6 +435,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             // ((2*94 + 45) / 3) / (85/100)
             breakeven: Money::from_copper(92),
             crafting_steps: 32,
+            market_actions: 5, // 2 ingredients, 3 price levels
             crafted_items: CraftedItems {
                 crafted,
                 leftovers: Default::default(),
@@ -693,9 +696,55 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
             // (50 * 2 + 30) / (85/100)
             breakeven: Money::from_copper(153),
             crafting_steps: 59,
+            market_actions: 5, // 3 ingredients, 2 price levels
             crafted_items: CraftedItems { crafted, leftovers },
         })
     );
+}
+
+#[test]
+fn calculate_crafting_profit_splits_market_actions_at_transaction_limit() {
+    let item_id = 1236;
+
+    let mut items_map = HashMap::new();
+    items_map.insert(1234, Item::mock(1234, "Ingredient", 0));
+    items_map.insert(item_id, Item::mock(item_id, "Main item", 0));
+
+    let mut recipes_map = HashMap::new();
+    recipes_map.insert(
+        item_id,
+        Recipe::mock(
+            7852,
+            item_id,
+            1,
+            [],
+            &[RecipeIngredient {
+                item_id: 1234,
+                count: 1,
+            }],
+            true,
+        ),
+    );
+
+    let tp_listings_map = tp_listings_map(vec![
+        (1234, vec![], vec![(1, 261)]),
+        (item_id, vec![(999, 10), (1000, 251)], vec![]),
+    ]);
+
+    let profitable_item = calculate_crafting_profit(
+        item_id,
+        &recipes_map,
+        &items_map,
+        &tp_listings_map,
+        None,
+        &Default::default(),
+    )
+    .unwrap();
+
+    // 2 buys for 261 of one ingredient; 2 sales for 251 at one price and 1 for 10 at the next
+    assert_eq!(profitable_item.count, 261);
+    assert_eq!(profitable_item.market_actions, 5);
+    assert_eq!(profitable_item.market_seconds(), 25.0);
 }
 
 fn tp_listings_map(
