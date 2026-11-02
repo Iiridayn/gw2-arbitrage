@@ -118,9 +118,6 @@ pub fn profitable_item_list(
 
     match CONFIG.sort {
         config::SortBy::Total => profitable_items.sort_unstable_by_key(|item| item.profit),
-        config::SortBy::Step => {
-            profitable_items.sort_unstable_by_key(|item| item.profit_per_crafting_step())
-        }
         config::SortBy::Hour => {
             profitable_items.sort_by_cached_key(|item| item.profit_per_hour(recipes_map))
         }
@@ -240,6 +237,7 @@ pub fn calculate_crafting_profit(
     >,
     opt: &config::CraftingOptions,
 ) -> Option<ProfitableItem> {
+    let api_listings_map = tp_listings_map;
     let buy_order_quantities: Vec<u32> = tp_listings_map.get(&item_id).map_or_else(Vec::new, |l| {
         l.buys.iter().map(|listing| listing.quantity).collect()
     });
@@ -259,6 +257,8 @@ pub fn calculate_crafting_profit(
     let mut crafting_count: u32 = 0;
     let mut crafted_items = crafting::CraftedItems::default();
     let mut tp_purchases: HashMap<u32, u32> = HashMap::new();
+    let mut best_score = 0.0;
+    let mut best_count = 0;
 
     let mut min_sell = 0;
     let max_sell = tp_listings_map.get(&item_id).map_or_else(
@@ -366,29 +366,49 @@ pub fn calculate_crafting_profit(
         debug_assert!(tp_listings_map
             .iter()
             .all(|(_, listing)| listing.pending_buy_quantity == 0));
+
+        if let Some(gold) = opt.min_per_hour {
+            let seconds = crafted_items.crafting_seconds(recipes_map)
+                + count_market_actions(
+                    &tp_purchases,
+                    &buy_order_quantities,
+                    crafting_count,
+                    opt.value.is_some(),
+                ) as f64
+                    * TP_ACTION_SECONDS;
+            let score = listing_profit.to_copper_value() as f64
+                - gold as f64 * 10000.0 * seconds / 3600.0;
+            if score > best_score {
+                best_score = score;
+                best_count = crafting_count;
+            }
+        }
+    }
+
+    if opt.min_per_hour.is_some() {
+        if best_count == 0 {
+            return None;
+        }
+        if best_count < crafting_count {
+            if let Some(purchased_ingredients) = &mut purchased_ingredients {
+                purchased_ingredients.clear();
+            }
+            return calculate_crafting_profit(
+                item_id,
+                recipes_map,
+                items_map,
+                api_listings_map,
+                purchased_ingredients,
+                &config::CraftingOptions {
+                    count: Some(best_count),
+                    min_per_hour: None,
+                    ..*opt
+                },
+            );
+        }
     }
 
     if crafting_count > 0 && !listing_profit.is_zero() {
-        let buy_actions: u32 = tp_purchases
-            .values()
-            .map(|count| count.div_ceil(ITEM_STACK_SIZE))
-            .sum();
-        let sell_actions: u32 = if opt.value.is_some() {
-            crafting_count.div_ceil(ITEM_STACK_SIZE)
-        } else {
-            // A sale can't span price levels; buys are sorted in ascending price
-            let mut unsold = crafting_count;
-            buy_order_quantities
-                .iter()
-                .rev()
-                .map(|&quantity| {
-                    let sold = quantity.min(unsold);
-                    unsold -= sold;
-                    sold.div_ceil(ITEM_STACK_SIZE)
-                })
-                .sum()
-        };
-
         Some(ProfitableItem {
             id: item_id,
             crafting_cost: total_crafting_cost,
@@ -398,12 +418,47 @@ pub fn calculate_crafting_profit(
             min_sell: Money::from_copper(min_sell as i32),
             breakeven: breakeven.trading_post_listing_price(),
             crafting_steps: crafted_items.crafting_steps(recipes_map).to_integer(),
-            market_actions: buy_actions + sell_actions,
+            market_actions: count_market_actions(
+                &tp_purchases,
+                &buy_order_quantities,
+                crafting_count,
+                opt.value.is_some(),
+            ),
             crafted_items,
         })
     } else {
         None
     }
+}
+
+/// One transaction per stack bought of each ingredient, and per stack sold into each price level,
+/// since a sale can't span prices
+fn count_market_actions(
+    tp_purchases: &HashMap<u32, u32>,
+    buy_order_quantities: &[u32],
+    sold: u32,
+    fixed_value: bool,
+) -> u32 {
+    let buy_actions: u32 = tp_purchases
+        .values()
+        .map(|count| count.div_ceil(ITEM_STACK_SIZE))
+        .sum();
+    let sell_actions: u32 = if fixed_value {
+        sold.div_ceil(ITEM_STACK_SIZE)
+    } else {
+        // buys are sorted in ascending price
+        let mut unsold = sold;
+        buy_order_quantities
+            .iter()
+            .rev()
+            .map(|&quantity| {
+                let sold_at_price = quantity.min(unsold);
+                unsold -= sold_at_price;
+                sold_at_price.div_ceil(ITEM_STACK_SIZE)
+            })
+            .sum()
+    };
+    buy_actions + sell_actions
 }
 
 #[derive(Debug, Eq, PartialEq)]

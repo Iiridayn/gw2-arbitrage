@@ -81,6 +81,37 @@ impl MockRecipe for Recipe {
     }
 }
 
+/// Items and recipes for an item made from one of an ingredient
+pub fn one_ingredient_maps(
+    item_id: u32,
+    ingredient_id: u32,
+    ingredient_vendor_value: u32,
+) -> (HashMap<u32, Item>, HashMap<u32, Recipe>) {
+    let mut items_map = HashMap::new();
+    items_map.insert(item_id, Item::mock(item_id, "Main item", 0));
+    items_map.insert(
+        ingredient_id,
+        Item::mock(ingredient_id, "Ingredient", ingredient_vendor_value),
+    );
+
+    let mut recipes_map = HashMap::new();
+    recipes_map.insert(
+        item_id,
+        Recipe::mock(
+            1,
+            item_id,
+            1,
+            [],
+            &[RecipeIngredient {
+                item_id: ingredient_id,
+                count: 1,
+            }],
+            true,
+        ),
+    );
+    (items_map, recipes_map)
+}
+
 pub fn tp_listings_map(
     from: Vec<(u32, Vec<(u32, u32)>, Vec<(u32, u32)>)>,
 ) -> HashMap<u32, ItemListings> {

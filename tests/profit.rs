@@ -1,10 +1,10 @@
 mod common;
 
-use common::{tp_listings_map, MockItem, MockRecipe};
+use common::{one_ingredient_maps, tp_listings_map, MockItem, MockRecipe};
 
 use gw2_arbitrage::{
     api::{self, ItemListings, Listing, RecipeIngredient},
-    config::Discipline,
+    config::{CraftingOptions, Discipline},
     crafting::{self, CraftedItems, PurchasedIngredient},
     custom_recipes,
     item::Item,
@@ -632,49 +632,50 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
     );
 }
 
+/// Profit of item 1000, made from one of ingredient 1001, without crafting time
+fn one_ingredient_profit(
+    ingredient_sells: Vec<(u32, u32)>,
+    buys: Vec<(u32, u32)>,
+    opt: &CraftingOptions,
+) -> Option<ProfitableItem> {
+    let (items_map, recipes_map) = one_ingredient_maps(1000, 1001, 0);
+    let tp_listings_map =
+        tp_listings_map(vec![(1001, vec![], ingredient_sells), (1000, buys, vec![])]);
+    calculate_crafting_profit(1000, &recipes_map, &items_map, &tp_listings_map, None, opt)
+}
+
 #[test]
 fn calculate_crafting_profit_splits_market_actions_at_stack_size() {
-    let item_id = 1236;
-
-    let mut items_map = HashMap::new();
-    items_map.insert(1234, Item::mock(1234, "Ingredient", 0));
-    items_map.insert(item_id, Item::mock(item_id, "Main item", 0));
-
-    let mut recipes_map = HashMap::new();
-    recipes_map.insert(
-        item_id,
-        Recipe::mock(
-            7852,
-            item_id,
-            1,
-            [],
-            &[RecipeIngredient {
-                item_id: 1234,
-                count: 1,
-            }],
-            true,
-        ),
-    );
-
-    let tp_listings_map = tp_listings_map(vec![
-        (1234, vec![], vec![(1, 261)]),
-        (item_id, vec![(999, 10), (1000, 251)], vec![]),
-    ]);
-
-    let profitable_item = calculate_crafting_profit(
-        item_id,
-        &recipes_map,
-        &items_map,
-        &tp_listings_map,
-        None,
-        &Default::default(),
-    )
-    .unwrap();
+    let profitable_item =
+        one_ingredient_profit(vec![(1, 261)], vec![(999, 10), (1000, 251)], &Default::default())
+            .unwrap();
 
     // 2 buys for 261 of one ingredient; 2 sales for 251 at one price and 1 for 10 at the next
     assert_eq!(profitable_item.count, 261);
     assert_eq!(profitable_item.market_actions, 5);
     assert_eq!(profitable_item.market_seconds(), 25.0);
+}
+
+#[test]
+fn calculate_crafting_profit_min_per_hour_stops_at_best_count() {
+    let at_rate = |gold| {
+        one_ingredient_profit(
+            vec![(1, 100)],
+            vec![(1000, 1), (12, 1), (10, 1)],
+            &CraftingOptions {
+                min_per_hour: Some(gold),
+                ..Default::default()
+            },
+        )
+    };
+
+    // At 1g / hour, 5 seconds is worth about 14c, more than the 2nd and 3rd sales earn
+    let profitable_item = at_rate(1).unwrap();
+    assert_eq!(profitable_item.count, 1);
+    assert_eq!(profitable_item.market_actions, 2);
+
+    // At 100g / hour, even the first sale isn't worth the time
+    assert!(at_rate(100).is_none());
 }
 
 mod data {

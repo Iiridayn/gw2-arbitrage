@@ -518,7 +518,7 @@ fn print_item_list(
     .cycle();
 
     let header = format!(
-        "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
+        "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
         "Name",
         "Disciplines",
         "Item id",
@@ -526,10 +526,7 @@ fn print_item_list(
         "Total profit",
         "No. required",
         "Profit / item",
-        "Crafting steps",
-        "Profit / step",
-        "Crafting time",
-        "Market time",
+        "Time",
         "Profit / hour",
         "Profit on cost",
     );
@@ -586,7 +583,7 @@ fn print_item_list(
         }
 
         let line = format!(
-            "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
+            "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
             output_row.name,
             output_row.disciplines,
             format!("{}", output_row.item_id),
@@ -610,11 +607,8 @@ fn print_item_list(
                 }
             ),
             format!("{} / item", output_row.profit_per_item),
-            format!("{} steps", output_row.crafting_steps),
-            format!("{} / step", output_row.profit_per_step),
-            format_duration(output_row.crafting_seconds),
-            format_duration(output_row.market_seconds),
-            profit_per_hour.to_string(),
+            format_duration(output_row.crafting_seconds + output_row.market_seconds),
+            format!("{}/hr", profit_per_hour),
             format!("{}%", (output_row.profit_on_cost * 100_f64).round())
         );
 
@@ -627,6 +621,9 @@ fn print_item_list(
 
     let total_profit: Money = profitable_items.iter().map(|item| item.profit).sum();
     println!("Total: {}", total_profit);
+    if CONFIG.crafting.min_per_hour.is_some() {
+        println!("Pass an item's count with --count for the same crafting steps");
+    }
 
     if let Some(writer) = &mut csv_writer {
         writer.flush()?;

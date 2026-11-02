@@ -23,6 +23,7 @@ pub struct CraftingOptions {
     pub include_timegated: bool,
     pub count: Option<u32>,
     pub min_per_item: Option<u32>,
+    pub min_per_hour: Option<u32>,
     pub value: Option<u32>,
 }
 
@@ -67,6 +68,7 @@ impl Config {
         config.crafting.include_timegated = opt.include_timegated;
         config.crafting.count = opt.count;
         config.crafting.min_per_item = opt.min_per_item;
+        config.crafting.min_per_hour = opt.min_per_hour;
         config.crafting.value = opt.value;
 
         config.output_csv = opt.output_csv;
@@ -75,7 +77,11 @@ impl Config {
 
         config.filter_disciplines = opt.filter_disciplines;
 
-        config.sort = opt.sort.unwrap_or_default();
+        config.sort = opt.sort.unwrap_or(if opt.min_per_hour.is_some() {
+            SortBy::Hour
+        } else {
+            SortBy::Total
+        });
 
         let file: ConfigFile = match get_file_config(&opt.config_file) {
             Ok(config) => config,
@@ -256,10 +262,16 @@ struct Opt {
     #[structopt(long)]
     min_per_item: Option<u32>,
 
+    /// Make the count that earns the most over the opportunity cost of your time, in gold per hour
+    /// spent crafting and trading
+    #[structopt(long)]
+    min_per_hour: Option<u32>,
+
     #[structopt(short = "d", long = "disciplines", use_delimiter = true, help = &DISCIPLINES_HELP, parse(try_from_str = get_discipline))]
     filter_disciplines: Option<Vec<Discipline>>,
 
-    /// Sort the item list by one of "total", "step" or "hour" profit. Defaults to "total"
+    /// Sort the item list by "total" profit or profit per "hour". Defaults to "hour" with
+    /// --min-per-hour, otherwise "total"
     #[structopt(long, parse(try_from_str = get_sort))]
     sort: Option<SortBy>,
 
@@ -355,7 +367,6 @@ valid values: {}"#,
 pub enum SortBy {
     #[default]
     Total,
-    Step,
     Hour,
 }
 
