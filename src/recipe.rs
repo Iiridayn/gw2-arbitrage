@@ -31,6 +31,7 @@ pub struct Recipe {
     pub disciplines: Vec<config::Discipline>,
     pub ingredients: Vec<api::RecipeIngredient>,
     pub currencies: Vec<CurrencyCost>,
+    pub time_to_craft_ms: Option<u32>, // not included in custom recipes
     source: RecipeSource,
 }
 
@@ -50,6 +51,7 @@ impl From<api::Recipe> for Recipe {
             disciplines: recipe.disciplines,
             ingredients: recipe.ingredients,
             currencies: vec![],
+            time_to_craft_ms: Some(recipe.time_to_craft_ms),
             source,
         }
     }
@@ -102,12 +104,37 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
             disciplines: recipe.disciplines,
             ingredients,
             currencies,
+            time_to_craft_ms: None,
             source,
         })
     }
 }
 
 impl Recipe {
+    /// Estimated seconds to make one batch of this recipe
+    pub fn crafting_seconds(&self, steps: u32) -> f64 {
+        use config::Discipline::{
+            Achievement, Charge, DoubleClick, Growing, Merchant, MysticForge, Salvage,
+        };
+
+        let steps = steps as f64;
+        let has = |discipline: config::Discipline| self.disciplines.contains(&discipline);
+        // Fit of batches timed at 1s, 2s and 7s base craft times
+        let crafting_station = |base_seconds: f64| base_seconds * (2.3 + 0.16 * steps);
+
+        if let Some(ms) = self.time_to_craft_ms {
+            crafting_station(ms as f64 / 1000.0)
+        } else if has(MysticForge) {
+            20.0 + 2.0 * (steps - 1.0)
+        } else if has(DoubleClick) || has(Salvage) {
+            0.5 * steps
+        } else if has(Merchant) || has(Charge) || has(Achievement) || has(Growing) {
+            0.0
+        } else {
+            crafting_station(1.0)
+        }
+    }
+
     /// Total currency cost of one craft. None if any currency has no copper value.
     pub fn currency_cost(&self) -> Option<Money> {
         let mut cost = Money::default();

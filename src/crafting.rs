@@ -123,6 +123,17 @@ impl CraftedItems {
         total_crafting_steps
     }
 
+    /// Estimated seconds to craft everything, with one batch per crafted item
+    pub fn crafting_seconds(&self, recipes_map: &HashMap<u32, Recipe>) -> f64 {
+        self.crafted
+            .iter()
+            .filter_map(|(item_id, &count)| {
+                let recipe = recipes_map.get(item_id)?;
+                Some(recipe.crafting_seconds(count / recipe.output_item_count))
+            })
+            .sum()
+    }
+
     // TODO: merge w/recipes? The difference is there we need all regardless of what will be
     // crafted; here we know what will be crafted.
     pub fn unknown_recipes(

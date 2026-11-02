@@ -386,6 +386,16 @@ impl ProfitableItem {
         self.profit / self.crafting_steps
     }
 
+    /// None if crafting takes no measured time
+    pub fn profit_per_hour(&self, crafting_seconds: f64) -> Option<Money> {
+        if crafting_seconds > 0.0 {
+            let per_hour = self.profit.to_copper_value() as f64 * 3600.0 / crafting_seconds;
+            Some(Money::from_copper(per_hour as i32))
+        } else {
+            None
+        }
+    }
+
     pub fn profit_on_cost(&self) -> f64 {
         self.profit.percent(self.crafting_cost)
     }

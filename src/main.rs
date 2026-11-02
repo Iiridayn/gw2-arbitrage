@@ -327,6 +327,12 @@ fn print_profitable_item(
 
     println!("============");
     println!("Max inventory slots: {}", inventory + 1); // + 1 for the crafting output
+    let crafting_seconds = profitable_item.crafted_items.crafting_seconds(&recipes_map);
+    println!(
+        "Crafting time: {} ({} / hour)",
+        format_duration(crafting_seconds),
+        format_profit_per_hour(profitable_item.profit_per_hour(crafting_seconds)),
+    );
     println!(
         "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
         profitable_item.count, item_id
@@ -443,7 +449,27 @@ struct OutputRow {
     profit_per_item: i32,
     crafting_steps: u32,
     profit_per_step: i32,
+    crafting_seconds: f64,
+    profit_per_hour: Option<i32>,
     profit_on_cost: f64,
+}
+
+fn format_duration(seconds: f64) -> String {
+    let seconds = seconds.round() as u32;
+    if seconds >= 3600 {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        )
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
+fn format_profit_per_hour(profit: Option<Money>) -> String {
+    profit.map_or_else(|| "-".to_string(), |profit| profit.to_string())
 }
 
 /// List profitable items to screen or CSV
@@ -470,7 +496,7 @@ fn print_item_list(
     .cycle();
 
     let header = format!(
-        "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
+        "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
         "Name",
         "Disciplines",
         "Item id",
@@ -480,6 +506,8 @@ fn print_item_list(
         "Profit / item",
         "Crafting steps",
         "Profit / step",
+        "Crafting time",
+        "Profit / hour",
         "Profit on cost",
     );
 
@@ -501,6 +529,9 @@ fn print_item_list(
 
         let recipe = recipes_map.get(&item_id).expect("Missing recipe");
 
+        let crafting_seconds = profitable_item.crafted_items.crafting_seconds(&recipes_map);
+        let profit_per_hour = profitable_item.profit_per_hour(crafting_seconds);
+
         let output_row = OutputRow {
             name: name.to_string(),
             disciplines: recipe
@@ -521,6 +552,8 @@ fn print_item_list(
             profit_per_item: profitable_item.profit_per_item().to_copper_value(),
             crafting_steps: profitable_item.crafting_steps,
             profit_per_step: profitable_item.profit_per_crafting_step().to_copper_value(),
+            crafting_seconds,
+            profit_per_hour: profit_per_hour.map(|profit| profit.to_copper_value()),
             profit_on_cost: profitable_item.profit_on_cost(),
         };
 
@@ -529,7 +562,7 @@ fn print_item_list(
         }
 
         let line = format!(
-            "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
+            "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
             output_row.name,
             output_row.disciplines,
             format!("{}", output_row.item_id),
@@ -555,6 +588,8 @@ fn print_item_list(
             format!("{} / item", output_row.profit_per_item),
             format!("{} steps", output_row.crafting_steps),
             format!("{} / step", output_row.profit_per_step),
+            format_duration(output_row.crafting_seconds),
+            format_profit_per_hour(profit_per_hour),
             format!("{}%", (output_row.profit_on_cost * 100_f64).round())
         );
 
