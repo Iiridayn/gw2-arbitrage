@@ -22,7 +22,7 @@ pub const CACHE_PREFIX: &str = "cache_";
 pub struct CraftingOptions {
     pub include_timegated: bool,
     pub count: Option<u32>,
-    pub threshold: Option<u32>,
+    pub min_per_item: Option<u32>,
     pub value: Option<u32>,
 }
 
@@ -65,7 +65,7 @@ impl Config {
 
         config.crafting.include_timegated = opt.include_timegated;
         config.crafting.count = opt.count;
-        config.crafting.threshold = opt.threshold;
+        config.crafting.min_per_item = opt.min_per_item;
         config.crafting.value = opt.value;
 
         config.output_csv = opt.output_csv;
@@ -249,9 +249,9 @@ struct Opt {
     #[structopt(long)]
     value: Option<u32>,
 
-    /// Threshold - min profit per item in copper
+    /// Minimum profit per item in copper, for every item made
     #[structopt(long)]
-    threshold: Option<u32>,
+    min_per_item: Option<u32>,
 
     #[structopt(short = "d", long = "disciplines", use_delimiter = true, help = &DISCIPLINES_HELP, parse(try_from_str = get_discipline))]
     filter_disciplines: Option<Vec<Discipline>>,

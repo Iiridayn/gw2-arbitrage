@@ -233,7 +233,7 @@ pub fn calculate_crafting_profit(
 
     let recipe = recipes_map.get(&item_id);
     let output_item_count = recipe.map(|recipe| recipe.output_item_count).unwrap_or(1);
-    let threshold = Money::from_copper(opt.threshold.unwrap_or(0) as i32);
+    let min_profit = Money::from_copper(opt.min_per_item.unwrap_or(0) as i32) * output_item_count;
 
     let mut listing_profit = Money::zero();
     let mut total_crafting_cost = Money::zero();
@@ -242,7 +242,7 @@ pub fn calculate_crafting_profit(
 
     let mut min_sell = 0;
     let max_sell = tp_listings_map.get(&item_id).map_or_else(
-        || opt.threshold.unwrap_or(0),
+        || opt.value.unwrap_or(0),
         |listings| listings.buys.last().map_or(0, |l| l.unit_price),
     );
     let mut breakeven = Money::zero();
@@ -290,7 +290,7 @@ pub fn calculate_crafting_profit(
         };
 
         // Ensure buy_price is larger before subtracting cost for profit
-        if buy_price < crafting_cost + threshold {
+        if buy_price < crafting_cost + min_profit {
             break;
         }
 
