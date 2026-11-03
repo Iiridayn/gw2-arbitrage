@@ -209,6 +209,10 @@ fn charge_unlocks(
         &CONFIG.crafting,
     );
     if unlocks.known_recipes.is_some() {
+        // Can no longer be learned: Wooden Sword, Asuran Harpoon
+        if required.contains_key(&5424) || required.contains_key(&6057) {
+            return None;
+        }
         // keyed by unlock item, since one can unlock several recipes
         let costs: HashMap<u32, Money> = required.values().flatten().copied().collect();
         let cost: Money = costs.into_values().sum();

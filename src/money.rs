@@ -1,6 +1,7 @@
 use num_rational::{Rational32, Rational64};
-use num_traits::{ToPrimitive, Zero};
+use num_traits::{Signed, ToPrimitive, Zero};
 
+use std::array;
 use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
@@ -16,17 +17,53 @@ use crate::config::CONFIG;
 const TRADING_POST_LISTING_FEE: u8 = 5; // %
 const TRADING_POST_EXCHANGE_FEE: u8 = 10; // %
 
-// TODO: spirit shards, laurels,
+/// Currencies other than coin, valued by their configured rate in copper
+// TODO: laurels,
 // badges of honor? Testimony/proof of heroics
 // Geodes, Bandit Crests, Airship Parts, Aurillium, Ley Crystals, Trade Contracts, Racing Medallions
 // Fractal Relics
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum Currency {
+    Karma,
+    UnboundMagic,
+    VolatileMagic,
+    ResearchNote,
+    SpiritShard,
+}
+use Currency::*;
+
+impl Currency {
+    pub const ALL: [Currency; 5] = [Karma, UnboundMagic, VolatileMagic, ResearchNote, SpiritShard];
+
+    /// API currency id
+    fn id(self) -> u32 {
+        match self {
+            Karma => 2,
+            UnboundMagic => 32,
+            VolatileMagic => 45,
+            ResearchNote => 61,
+            SpiritShard => 23,
+        }
+    }
+
+    fn abbrev(self) -> &'static str {
+        match self {
+            Karma => "Karma",
+            UnboundMagic => "UM",
+            VolatileMagic => "VM",
+            ResearchNote => "RN",
+            SpiritShard => "SS",
+        }
+    }
+}
+
+const COIN_ID: u32 = 1;
+
 #[derive(Copy, Clone, Eq)]
 pub struct Money {
     copper: Rational32,
-    karma: Rational32,
-    um: Rational32,
-    vm: Rational32,
-    rn: Rational32,
+    // indexed by `Currency as usize`
+    currencies: [Rational32; Currency::ALL.len()],
 }
 impl Money {
     pub fn from_copper(copper: i32) -> Self {
@@ -35,58 +72,27 @@ impl Money {
             ..Default::default()
         }
     }
-    pub fn from_karma(karma: i32) -> Self {
-        Self {
-            karma: Rational32::from(karma),
-            ..Default::default()
-        }
-    }
-    pub fn from_um(um: i32) -> Self {
-        Self {
-            um: Rational32::from(um),
-            ..Default::default()
-        }
-    }
-    pub fn from_vm(vm: i32) -> Self {
-        Self {
-            vm: Rational32::from(vm),
-            ..Default::default()
-        }
-    }
-    pub fn from_rn(rn: i32) -> Self {
-        Self {
-            rn: Rational32::from(rn),
-            ..Default::default()
-        }
+    /// None if the currency's rate isn't configured
+    pub fn from_currency(currency: Currency, count: u32) -> Option<Self> {
+        CONFIG.rates[currency as usize]?;
+        let mut money = Self::zero();
+        money.currencies[currency as usize] = Rational32::from(count as i32);
+        Some(money)
     }
     /// None if the currency has no copper value: untracked, or its rate isn't configured.
-    pub fn from_currency(currency_id: u32, count: u32) -> Option<Self> {
-        let count = count as i32;
-        match currency_id {
-            1 => Some(Self::from_copper(count)),
-            2 if CONFIG.karma != None => Some(Self::from_karma(count)),
-            32 if CONFIG.um != None => Some(Self::from_um(count)),
-            45 if CONFIG.vm != None => Some(Self::from_vm(count)),
-            61 if CONFIG.rn != None => Some(Self::from_rn(count)),
-            _ => None,
+    pub fn from_api_currency(currency_id: u32, count: u32) -> Option<Self> {
+        if currency_id == COIN_ID {
+            return Some(Self::from_copper(count as i32));
         }
-    }
-    pub fn new(copper: i32, karma: i32, um: i32, vm: i32, rn: i32) -> Self {
-        Self {
-            copper: Rational32::from(copper),
-            karma: Rational32::from(karma),
-            um: Rational32::from(um),
-            vm: Rational32::from(vm),
-            rn: Rational32::from(rn),
-        }
+        let currency = Currency::ALL.iter().copied().find(|c| c.id() == currency_id)?;
+        Self::from_currency(currency, count)
     }
 
     fn copper_value(&self) -> Rational32 {
-        self.copper
-            + self.karma * CONFIG.karma.unwrap_or(Rational32::zero())
-            + self.um * CONFIG.um.unwrap_or(Rational32::zero())
-            + self.vm * CONFIG.vm.unwrap_or(Rational32::zero())
-            + self.rn * CONFIG.rn.unwrap_or(Rational32::zero())
+        Currency::ALL.iter().copied().fold(self.copper, |value, currency| {
+            let rate = CONFIG.rates[currency as usize].unwrap_or(Rational32::zero());
+            value + self.currencies[currency as usize] * rate
+        })
     }
     pub fn to_copper_value(&self) -> i32 {
         self.copper_value().ceil().to_integer()
@@ -134,10 +140,7 @@ impl Money {
     pub fn increase_by_listing_fee(self) -> Money {
         Money {
             copper: self.copper + self.fee(TRADING_POST_LISTING_FEE),
-            karma: self.karma,
-            um: self.um,
-            vm: self.vm,
-            rn: self.rn,
+            currencies: self.currencies,
         }
     }
 
@@ -147,37 +150,40 @@ impl Money {
         let other_value = other.copper_value().to_f64().unwrap_or(f64::INFINITY);
         value / other_value
     }
+
+    fn format_copper(&self) -> String {
+        let copper = self.copper.to_integer();
+        let sign = if copper < 0 { "-" } else { "" };
+        let copper = copper.abs();
+
+        let gold = copper / 10000;
+        let silver = (copper - gold * 10000) / 100;
+        let copper = copper - gold * 10000 - silver * 100;
+
+        format!("{}{}.{:02}.{:02}g", sign, gold, silver, copper)
+    }
+
+    /// Nonzero currencies other than coin, with their whole units needed, signed like copper
+    fn currency_units(&self) -> impl Iterator<Item = (Currency, String)> + '_ {
+        Currency::ALL.iter().copied().filter_map(move |currency| {
+            let count = self.currencies[currency as usize];
+            if count.is_zero() {
+                return None;
+            }
+            let sign = if count < Rational32::zero() { "-" } else { "" };
+            Some((currency, format!("{}{}", sign, count.abs().ceil().to_integer())))
+        })
+    }
 }
 impl fmt::Display for Money {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut currencies = Vec::new();
 
         if self.copper != Rational32::zero() {
-            let copper = self.copper.to_integer();
-            let sign = if copper < 0 { "-" } else { "" };
-            let copper = copper.abs();
-
-            let gold = copper / 10000;
-            let silver = (copper - gold * 10000) / 100;
-            let copper = copper - gold * 10000 - silver * 100;
-
-            currencies.push(format!("{}{}.{:02}.{:02}g", sign, gold, silver, copper));
+            currencies.push(self.format_copper());
         }
-
-        if self.karma != Rational32::zero() {
-            currencies.push(format!("{} Karma", self.karma.to_integer()));
-        }
-
-        if self.um != Rational32::zero() {
-            currencies.push(format!("{} UM", self.um.to_integer()));
-        }
-
-        if self.vm != Rational32::zero() {
-            currencies.push(format!("{} VM", self.vm.to_integer()));
-        }
-
-        if self.rn != Rational32::zero() {
-            currencies.push(format!("{} RN", self.rn.to_integer()));
+        for (currency, units) in self.currency_units() {
+            currencies.push(format!("{} {}", units, currency.abbrev()));
         }
 
         write!(f, "{}", currencies.join(", "))
@@ -192,10 +198,7 @@ impl Zero for Money {
     fn zero() -> Self {
         Self {
             copper: Rational32::zero(),
-            karma: Rational32::zero(),
-            um: Rational32::zero(),
-            vm: Rational32::zero(),
-            rn: Rational32::zero(),
+            currencies: [Rational32::zero(); Currency::ALL.len()],
         }
     }
     fn is_zero(&self) -> bool {
@@ -208,10 +211,7 @@ impl std::ops::Add for Money {
     fn add(self, other: Self) -> Self {
         Self {
             copper: self.copper + other.copper,
-            karma: self.karma + other.karma,
-            um: self.um + other.um,
-            vm: self.vm + other.vm,
-            rn: self.rn + other.rn,
+            currencies: array::from_fn(|i| self.currencies[i] + other.currencies[i]),
         }
     }
 }
@@ -221,22 +221,13 @@ impl std::ops::Sub for Money {
     fn sub(self, other: Self) -> Self {
         Self {
             copper: self.copper - other.copper,
-            karma: self.karma - other.karma,
-            um: self.um - other.um,
-            vm: self.vm - other.vm,
-            rn: self.rn - other.rn,
+            currencies: array::from_fn(|i| self.currencies[i] - other.currencies[i]),
         }
     }
 }
 impl std::ops::AddAssign for Money {
     fn add_assign(&mut self, other: Self) {
-        *self = Self {
-            copper: self.copper + other.copper,
-            karma: self.karma + other.karma,
-            um: self.um + other.um,
-            vm: self.vm + other.vm,
-            rn: self.rn + other.rn,
-        }
+        *self = *self + other;
     }
 }
 impl std::ops::Mul<u32> for Money {
@@ -245,10 +236,7 @@ impl std::ops::Mul<u32> for Money {
     fn mul(self, other: u32) -> Self {
         Self {
             copper: self.copper * other as i32,
-            karma: self.karma * other as i32,
-            um: self.um * other as i32,
-            vm: self.vm * other as i32,
-            rn: self.rn * other as i32,
+            currencies: self.currencies.map(|count| count * other as i32),
         }
     }
 }
@@ -258,20 +246,13 @@ impl std::ops::Div<u32> for Money {
     fn div(self, other: u32) -> Self {
         Self {
             copper: self.copper / other as i32,
-            karma: self.karma / other as i32,
-            um: self.um / other as i32,
-            vm: self.vm / other as i32,
-            rn: self.rn / other as i32,
+            currencies: self.currencies.map(|count| count / other as i32),
         }
     }
 }
 impl PartialEq for Money {
     fn eq(&self, other: &Self) -> bool {
-        self.copper == other.copper
-            && self.karma == other.karma
-            && self.um == other.um
-            && self.vm == other.vm
-            && self.rn == other.rn
+        self.copper == other.copper && self.currencies == other.currencies
     }
 }
 impl PartialOrd for Money {
@@ -295,10 +276,7 @@ impl std::iter::Sum for Money {
                 i64::from(*src.copper.numer()),
                 i64::from(*src.copper.denom()),
             );
-            sink.karma += src.karma;
-            sink.um += src.um;
-            sink.vm += src.vm;
-            sink.rn += src.rn;
+            sink.currencies = array::from_fn(|i| sink.currencies[i] + src.currencies[i]);
         }
         let mut error = false;
         sink.copper = Rational32::new(
@@ -323,34 +301,10 @@ impl fmt::Debug for Money {
         let mut result = f.debug_struct("Money");
 
         if self.copper != Rational32::zero() {
-            let copper = self.copper.to_integer();
-            let sign = if copper < 0 { "-" } else { "" };
-            let copper = copper.abs();
-
-            let gold = copper / 10000;
-            let silver = (copper - gold * 10000) / 100;
-            let copper = copper - gold * 10000 - silver * 100;
-
-            result.field(
-                "copper",
-                &format!("{}{}.{:02}.{:02}g", sign, gold, silver, copper),
-            );
+            result.field("copper", &self.format_copper());
         }
-
-        if self.karma != Rational32::zero() {
-            result.field("karma", &self.karma.to_integer());
-        }
-
-        if self.um != Rational32::zero() {
-            result.field("um", &self.um.to_integer());
-        }
-
-        if self.vm != Rational32::zero() {
-            result.field("vm", &self.vm.to_integer());
-        }
-
-        if self.rn != Rational32::zero() {
-            result.field("rn", &self.rn.to_integer());
+        for (currency, units) in self.currency_units() {
+            result.field(currency.abbrev(), &units);
         }
 
         result.finish()

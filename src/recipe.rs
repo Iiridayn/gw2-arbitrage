@@ -139,7 +139,7 @@ impl Recipe {
     pub fn currency_cost(&self) -> Option<Money> {
         let mut cost = Money::default();
         for currency in &self.currencies {
-            cost += Money::from_currency(currency.currency_id, currency.count)?;
+            cost += Money::from_api_currency(currency.currency_id, currency.count)?;
         }
         Some(cost)
     }

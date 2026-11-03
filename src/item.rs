@@ -7,6 +7,7 @@ use strum::Display;
 use crate::api::ApiItem;
 use crate::config;
 use crate::config::CONFIG;
+use crate::money::Currency::{Karma, UnboundMagic, VolatileMagic};
 use crate::money::Money;
 
 pub const ITEM_STACK_SIZE: u32 = 250; // GW2 uses a "stack size" of 250
@@ -181,6 +182,7 @@ impl Item {
     pub fn vendor_cost(&self) -> Option<(Money, u32)> {
         // standard vendor sell price is generally buy price * 8, see:
         // https://forum-en.gw2archive.eu/forum/community/api/How-to-get-the-vendor-sell-price
+        let karma = |count| Some((Money::from_currency(Karma, count)?, 1));
         match &self.id {
             // Standard vendor sell price
 
@@ -226,19 +228,17 @@ impl Item {
 
             // Apples, Buttermilk, Celery Stalks, Cheese Wedges, Cumin, Green Beans, Lemons, Nutmeg
             // Seeds, Tomatoes, Yeast
-            12788 | 12801 | 12790 | 12802 | 12793 | 12794 | 12795 | 12796 | 12798 | 12804
-                if CONFIG.karma != None
-                => Some((Money::from_karma(35), 1)),
+            12788 | 12801 | 12790 | 12802 | 12793 | 12794 | 12795 | 12796 | 12798 | 12804 => karma(35),
             // Bananas, Basil Leaves, Bell Peppers, Black Beans, Kidney Beans, Rice
-            12773 | 12774 | 12776 | 12777 | 12778 | 12780 if CONFIG.karma != None => Some((Money::from_karma(49), 1)),
+            12773 | 12774 | 12776 | 12777 | 12778 | 12780 => karma(49),
             // Almonds, Avocados, Cherries, Ginger Root, Limes, Sour Cream
-            12765 | 12766 | 12767 | 12768 | 12769 | 12764 if CONFIG.karma != None => Some((Money::from_karma(77), 1)),
+            12765 | 12766 | 12767 | 12768 | 12769 | 12764 => karma(77),
             // Chickpeas, Coconuts, Horseradish Root, Pears, Pinenuts, Shallots
-            12781 | 12782 | 12783 | 12785 | 12786 | 12787 if CONFIG.karma != None => Some((Money::from_karma(112), 1)),
+            12781 | 12782 | 12783 | 12785 | 12786 | 12787 => karma(112),
             // Eggplants, Peaches
-            12770 | 12771 if CONFIG.karma != None => Some((Money::from_karma(154), 1)),
+            12770 | 12771 => karma(154),
             // Mangos
-            12772 if CONFIG.karma != None => Some((Money::from_karma(203), 1)),
+            12772 => karma(203),
 
             _ => None,
         }
@@ -260,26 +260,28 @@ impl Item {
             // 79469 Petrified Wood
             // 80332 Jade Shard
             // 81127 Fire Orchid Blossom
-            79280 | 79469 | 80332 | 81127 if CONFIG.um != None => Some(Money::from_um(38)),
+            79280 | 79469 | 80332 | 81127 => Money::from_currency(UnboundMagic, 38),
             // 79899 Fresh Winterberry
             // 81706 Orrian Pearl
-            79899 | 81706 if CONFIG.um != None => Some(Money::from_um(19)),
+            79899 | 81706 => Money::from_currency(UnboundMagic, 19),
             // LW4
             // 86977 Difluorite Crystal
             // 87645 Inscribed Shard
             // 88955 Lump of Mistonium
             // 89537 Branded Mass
             // 90783 Mistborn Mote
-            86069 | 86977 | 87645 | 88955 | 90783 if CONFIG.vm != None => Some(Money::from_vm(20)),
+            86069 | 86977 | 87645 | 88955 | 90783 => Money::from_currency(VolatileMagic, 20),
             // 86069 Kralkatite Ore
-            89537 if CONFIG.vm != None => Some(Money::from_vm(4)),
+            89537 => Money::from_currency(VolatileMagic, 4),
             // Icebrood Saga
             // 92072 Hatched Chili
             92072 => Some(Money::from_copper(0)),
             // 92272 Eternal Ice Shard
-            92272 if CONFIG.vm != None && CONFIG.karma != None => {
+            92272 => {
                 // Can convert 75 into 10 tokens worth 20 VM each for 2688 karma
-                let value = Money::new(0, -2688, 0, 200, 0) / 75;
+                let value = (Money::from_currency(VolatileMagic, 200)?
+                    - Money::from_currency(Karma, 2688)?)
+                    / 75;
                 if value.to_copper_value() >= 0 {
                     Some(value)
                 } else {

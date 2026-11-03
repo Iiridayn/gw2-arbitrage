@@ -60,6 +60,7 @@ static BLACKLIST_ITEM_IDS: phf::Set<u32> = phf_set! {
 
     // Purchase restrictions the API doesn't expose:
     82376_u32, // Zunja's Necklace; once per account
+    91963_u32, // Voice of Metal; the vendor's copy is account bound
     // Mist Champion skins; need the champion unlocked, and can't be bought once the skin is used
     72077_u32, // Shadow Assassin Nika
     72772_u32, // Rogue Grymm Svaard

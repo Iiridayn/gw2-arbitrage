@@ -16,6 +16,8 @@ use toml;
 
 use lazy_static::lazy_static;
 
+use crate::money::Currency;
+
 pub const CACHE_PREFIX: &str = "cache_";
 
 #[derive(Debug, Default)]
@@ -39,10 +41,8 @@ pub struct Config {
 
     // Currency conversion values
     pub ascended: Option<u32>,
-    pub karma: Option<Rational32>,
-    pub um: Option<Rational32>,
-    pub vm: Option<Rational32>,
-    pub rn: Option<Rational32>,
+    // indexed by `Currency as usize`
+    pub rates: [Option<Rational32>; Currency::ALL.len()],
 
     pub cache_dir: PathBuf,
     pub api_recipes_file: PathBuf,
@@ -115,37 +115,18 @@ impl Config {
             None
         };
 
-        config.karma = if let Some(value) = opt.karma {
-            Rational32::approximate_float(value)
-        } else if let Some(currencies) = &file.currencies {
-            currencies.karma.and_then(Rational32::approximate_float)
-        } else {
-            None
-        };
-
-        config.um = if let Some(value) = opt.um {
-            Rational32::approximate_float(value)
-        } else if let Some(currencies) = &file.currencies {
-            currencies.um.and_then(Rational32::approximate_float)
-        } else {
-            None
-        };
-
-        config.vm = if let Some(value) = opt.vm {
-            Rational32::approximate_float(value)
-        } else if let Some(currencies) = &file.currencies {
-            currencies.vm.and_then(Rational32::approximate_float)
-        } else {
-            None
-        };
-
-        config.rn = if let Some(value) = opt.rn {
-            Rational32::approximate_float(value)
-        } else if let Some(currencies) = &file.currencies {
-            currencies.rn.and_then(Rational32::approximate_float)
-        } else {
-            None
-        };
+        let currencies = file.currencies.as_ref();
+        for &currency in Currency::ALL.iter() {
+            let (opt_rate, file_rate) = match currency {
+                Currency::Karma => (opt.karma, currencies.and_then(|c| c.karma)),
+                Currency::UnboundMagic => (opt.um, currencies.and_then(|c| c.um)),
+                Currency::VolatileMagic => (opt.vm, currencies.and_then(|c| c.vm)),
+                Currency::ResearchNote => (opt.rn, currencies.and_then(|c| c.rn)),
+                Currency::SpiritShard => (opt.ss, currencies.and_then(|c| c.ss)),
+            };
+            config.rates[currency as usize] =
+                opt_rate.or(file_rate).and_then(Rational32::approximate_float);
+        }
 
         if let Some(blacklists) = file.blacklist {
             config.item_blacklist = blacklists.items.map(HashSet::from_iter);
@@ -230,6 +211,7 @@ struct ConfigFileCurrencySection {
     um: Option<f64>,
     vm: Option<f64>,
     rn: Option<f64>,
+    ss: Option<f64>,
 }
 #[derive(Debug, Default, Deserialize)]
 struct ConfigFileBlacklistSection {
@@ -314,6 +296,10 @@ struct Opt {
     /// Include recipes that use research notes, using this conversion factor as the opportunity cost
     #[structopt(long)]
     rn: Option<f64>,
+
+    /// Include recipes that use spirit shards, using this conversion factor as the opportunity cost
+    #[structopt(long)]
+    ss: Option<f64>,
 }
 
 static CACHE_DIR_HELP: Lazy<String> = Lazy::new(|| {
@@ -347,6 +333,7 @@ static CONFIG_FILE_HELP: Lazy<String> = Lazy::new(|| {
     um = <opportunity cost per Unbound Magic>
     vm = <opportunity cost per Volatile Magic>
     rn = <opportunity cost per Research Note>
+    ss = <opportunity cost per Spirit Shard>
 
 The default file location is '{}'."#,
         config_file(&None).unwrap().display()
