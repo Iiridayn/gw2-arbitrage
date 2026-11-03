@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 
 use num_traits::Zero;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::api;
 use crate::config;
@@ -65,6 +65,7 @@ pub fn find_profitable_items(
             &recipes_map,
             &items_map,
             &tp_prices_map,
+            None,
             &CONFIG.crafting,
         ) {
             let effective_buy_price =
@@ -88,8 +89,10 @@ pub fn profitable_item_list(
     request_listing_item_ids: &Vec<u32>,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
-) -> Vec<ProfitableItem> {
-    let mut profitable_items: Vec<_> = profitable_item_ids
+    tp_prices_map: &HashMap<u32, api::Price>,
+    unlocks: &crafting::RecipeUnlocks,
+) -> Vec<(ProfitableItem, crafting::RequiredUnlocks)> {
+    let profitable_items: Vec<_> = profitable_item_ids
         .par_iter()
         .filter_map(|item_id| {
             let mut ingredient_ids = vec![*item_id];
@@ -115,11 +118,15 @@ pub fn profitable_item_list(
             )
         })
         .collect();
+    let mut profitable_items: Vec<_> = profitable_items
+        .into_iter()
+        .filter_map(|item| charge_unlocks(item, unlocks, recipes_map, items_map, tp_prices_map))
+        .collect();
 
     match CONFIG.sort {
-        config::SortBy::Total => profitable_items.sort_unstable_by_key(|item| item.profit),
+        config::SortBy::Total => profitable_items.sort_unstable_by_key(|(item, _)| item.profit),
         config::SortBy::Hour => {
-            profitable_items.sort_by_cached_key(|item| item.profit_per_hour(recipes_map))
+            profitable_items.sort_by_cached_key(|(item, _)| item.profit_per_hour(recipes_map))
         }
     }
 
@@ -130,52 +137,19 @@ pub async fn calc_item_profit(
     item_id: u32,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
-    known_recipes: &Option<HashSet<u32>>,
+    unlocks: &crafting::RecipeUnlocks<'_>,
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<
     (
-        Option<ProfitableItem>,
+        Option<(ProfitableItem, crafting::RequiredUnlocks)>,
         HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
-        Vec<u32>,
-        HashMap<u32, api::Price>,
         HashMap<u32, api::ItemListings>,
     ),
     Box<dyn std::error::Error>,
 > {
     let mut items_to_price = vec![];
-
-    let mut unknown_recipes = HashSet::new();
-    let mut recipe_prices = Default::default();
     if let Some(recipe) = recipes_map.get(&item_id) {
         recipe.collect_ingredient_ids(&recipes_map, &mut items_to_price);
-
-        recipe.collect_unknown_recipe_ids(&recipes_map, &known_recipes, &mut unknown_recipes);
-        let recipe_items: Vec<u32> = items_map
-            .iter()
-            .filter_map(|(_, item)| {
-                if let Some(unlocks) = &item.recipe_unlocks() {
-                    if unlocks
-                        .iter()
-                        .filter(|&recipe_id| unknown_recipes.contains(recipe_id))
-                        .count()
-                        > 0
-                    {
-                        return Some(item.id);
-                    }
-                }
-                None
-            })
-            .collect();
-        let prices: Vec<api::Price> =
-            request::request_item_ids("commerce/prices", &recipe_items, None, notify)
-                .await
-                .unwrap_or_else(|e| {
-                    if !e.to_string().contains("all ids provided are invalid") {
-                        eprintln!("Failed to fetch recipe prices: {}", e);
-                    }
-                    Default::default()
-                });
-        recipe_prices = vec_to_map(prices, |x| x.id);
     }
 
     let mut request_listing_item_ids = vec![item_id];
@@ -198,33 +172,58 @@ pub async fn calc_item_profit(
         &CONFIG.crafting,
     );
 
-    let required_unknown_recipes: Vec<u32> = if let Some(profitable_item) = &profitable_item {
-        profitable_item
-            .crafted_items
-            .crafted
-            .keys()
-            .filter_map(|item_id| {
-                if let Some(recipe) = recipes_map.get(&item_id) {
-                    if let Some(recipe_id) = recipe.id {
-                        if unknown_recipes.contains(&recipe_id) {
-                            return Some(recipe_id);
-                        }
-                    }
-                }
-                None
-            })
-            .collect()
-    } else {
-        Default::default()
+    let profitable_item = match profitable_item {
+        Some(item)
+            if !item
+                .crafted_items
+                .unknown_recipes(recipes_map, unlocks.known_recipes)
+                .is_empty() =>
+        {
+            // Unlock items and their crafting ingredients aren't known before crafting is decided
+            let tp_prices: Vec<api::Price> =
+                request::request_paginated("commerce/prices", &None, None).await?;
+            let tp_prices_map = vec_to_map(tp_prices, |x| x.id);
+            charge_unlocks(item, unlocks, recipes_map, items_map, &tp_prices_map)
+        }
+        Some(item) => Some((item, Default::default())),
+        None => None,
     };
 
-    Ok((
-        profitable_item,
-        purchased_ingredients,
-        required_unknown_recipes,
-        recipe_prices,
-        tp_listings_map,
-    ))
+    Ok((profitable_item, purchased_ingredients, tp_listings_map))
+}
+
+/// Find the unlock items an item's recipes need. If the account's recipes are known, charge them
+/// to the item, and return None if it's then no longer worth crafting.
+fn charge_unlocks(
+    mut item: ProfitableItem,
+    unlocks: &crafting::RecipeUnlocks,
+    recipes_map: &HashMap<u32, Recipe>,
+    items_map: &HashMap<u32, Item>,
+    tp_prices_map: &HashMap<u32, api::Price>,
+) -> Option<(ProfitableItem, crafting::RequiredUnlocks)> {
+    let required = unlocks.required(
+        &item.crafted_items,
+        recipes_map,
+        items_map,
+        tp_prices_map,
+        &CONFIG.crafting,
+    );
+    if unlocks.known_recipes.is_some() {
+        // keyed by unlock item, since one can unlock several recipes
+        let costs: HashMap<u32, Money> = required.values().flatten().copied().collect();
+        let cost: Money = costs.into_values().sum();
+        if !cost.is_zero() {
+            item.profit = item.profit - cost;
+            item.crafting_cost += cost;
+            let below_rate = CONFIG.crafting.min_per_hour.is_some_and(|gold| {
+                item.profit_per_hour(recipes_map) <= Money::from_copper(gold as i32 * 10000)
+            });
+            if item.profit <= Money::zero() || below_rate {
+                return None;
+            }
+        }
+    }
+    Some((item, required))
 }
 
 pub fn calculate_crafting_profit(

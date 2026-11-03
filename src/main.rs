@@ -120,21 +120,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         recipes_map.remove(&recipe_id);
     }
 
+    let unlocks = crafting::RecipeUnlocks::new(&items_map, &known_recipes);
+
     if let Some(item_id) = CONFIG.item_id {
-        let (
-            profitable_item,
-            purchased_ingredients,
-            required_unknown_recipes,
-            recipe_prices,
-            tp_listings_map,
-        ) = profit::calc_item_profit(item_id, &recipes_map, &items_map, &known_recipes, notify)
-            .await?;
+        let (profitable_item, purchased_ingredients, tp_listings_map) =
+            profit::calc_item_profit(item_id, &recipes_map, &items_map, &unlocks, notify).await?;
         print_profitable_item(
             item_id,
             &profitable_item,
             &purchased_ingredients,
-            &required_unknown_recipes,
-            &recipe_prices,
             &tp_listings_map,
             &recipes_map,
             &items_map,
@@ -184,9 +178,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &request_listing_item_ids,
             &recipes_map,
             &items_map,
+            &tp_prices_map,
+            &unlocks,
         );
 
-        print_item_list(&profitable_items, &recipes_map, &items_map, &known_recipes)?;
+        print_item_list(&profitable_items, &recipes_map, &items_map)?;
     }
 
     Ok(())
@@ -195,16 +191,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Print detailed information about a profitable item
 fn print_profitable_item(
     item_id: u32,
-    profitable_item: &Option<profit::ProfitableItem>,
+    profitable_item: &Option<(profit::ProfitableItem, crafting::RequiredUnlocks)>,
     purchased_ingredients: &HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
-    required_unknown_recipes: &Vec<u32>,
-    recipe_prices: &HashMap<u32, api::Price>,
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
     known_recipes: &Option<HashSet<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let profitable_item = if let Some(item) = profitable_item {
+    let (profitable_item, required_unlocks) = if let Some(item) = profitable_item {
         item
     } else {
         println!("Item is not profitable to craft");
@@ -393,41 +387,19 @@ fn print_profitable_item(
         }
     }
 
-    if required_unknown_recipes.len() > 0 {
-        let req_recipes = required_unknown_recipes
+    if !required_unlocks.is_empty() {
+        let req_recipes = required_unlocks
             .iter()
-            .map(|id| {
-                let recipe_names = items_map
-                    .iter()
-                    .filter(|(_, item)| {
-                        if let Some(unlocks) = &item.recipe_unlocks() {
-                            unlocks.iter().filter(|&recipe_id| id == recipe_id).count() > 0
-                        } else {
-                            false
-                        }
-                    })
-                    .map(|(_, item)| {
-                        // Need to get price, which means up at collect_ingredient_ids we'd need to
-                        // also search for unknown recipes at all levels, and add those to the
-                        // market list
-                        if let Some(listing) = recipe_prices.get(&item.id) {
-                            debug_assert!(listing.sells.unit_price < i32::MAX as u32);
-                            return format!(
-                                "{}, buy for {}",
-                                &item.name,
-                                Money::from_copper(listing.sells.unit_price as i32)
-                            );
-                        }
-                        format!("{}", &item.name)
-                    })
-                    .collect::<Vec<String>>()
-                    .join(" or ");
-                if recipe_names.len() > 0 {
-                    recipe_names
-                } else {
-                    // recipe 5424 for item 29407 has no unlock item, possibly others
-                    format!("Recipe {} is not available!", &id)
-                }
+            .map(|(recipe_id, unlock)| match unlock {
+                Some((unlock_id, cost)) => format!(
+                    "{}, {}",
+                    items_map
+                        .get(unlock_id)
+                        .map_or_else(|| "???".to_string(), |item| item.to_string()),
+                    cost
+                ),
+                // recipe 5424 for item 29407 has no unlock item, possibly others
+                None => format!("Recipe {} has no unlock item with a price", recipe_id),
             })
             .collect::<Vec<String>>()
             .join("\n");
@@ -437,11 +409,7 @@ fn print_profitable_item(
                 Some(_) => "can not",
                 None => "may not be able to",
             },
-            if required_unknown_recipes.len() > 1 {
-                "s"
-            } else {
-                ""
-            },
+            if required_unlocks.len() > 1 { "s" } else { "" },
             req_recipes,
         );
     }
@@ -496,10 +464,9 @@ fn format_duration(seconds: f64) -> String {
 
 /// List profitable items to screen or CSV
 fn print_item_list(
-    profitable_items: &Vec<profit::ProfitableItem>,
+    profitable_items: &Vec<(profit::ProfitableItem, crafting::RequiredUnlocks)>,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
-    known_recipes: &Option<HashSet<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut csv_writer = if let Some(path) = &CONFIG.output_csv {
         Some(csv::Writer::from_path(path)?)
@@ -533,7 +500,7 @@ fn print_item_list(
 
     println!("{}", header);
     println!("{}", "=".repeat(header.len()));
-    for profitable_item in profitable_items {
+    for (profitable_item, required_unlocks) in profitable_items {
         // Only required when prices are cached.
         // Profit may end up being 0, since potential profitable items are selected based
         // on cached prices, but the actual profit is calculated using detailed listings and
@@ -561,12 +528,7 @@ fn print_item_list(
                 .collect::<Vec<_>>()
                 .join("/"),
             item_id,
-            unknown_recipes: profitable_item
-                .crafted_items
-                .unknown_recipes(&recipes_map, &known_recipes)
-                .iter()
-                .map(|&id| id)
-                .collect(),
+            unknown_recipes: required_unlocks.keys().copied().collect(),
             total_profit: profitable_item.profit.to_string(),
             number_required: profitable_item.count,
             profit_per_item: profitable_item.profit_per_item().to_copper_value(),
@@ -587,15 +549,14 @@ fn print_item_list(
             output_row.name,
             output_row.disciplines,
             format!("{}", output_row.item_id),
-            format!(
-                "{}",
-                output_row
-                    .unknown_recipes
-                    .iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<String>>()
-                    .join(",")
-            ),
+            required_unlocks
+                .iter()
+                .map(|(recipe_id, unlock)| match unlock {
+                    Some((_, cost)) => format!("{} ({})", recipe_id, cost),
+                    None => format!("{} (?)", recipe_id),
+                })
+                .collect::<Vec<String>>()
+                .join(","),
             output_row.total_profit,
             format!(
                 "{} item{}",
@@ -619,7 +580,7 @@ fn print_item_list(
     println!("{}", header);
     println!("{}", "=".repeat(header.len()));
 
-    let total_profit: Money = profitable_items.iter().map(|item| item.profit).sum();
+    let total_profit: Money = profitable_items.iter().map(|(item, _)| item.profit).sum();
     println!("Total: {}", total_profit);
     if CONFIG.crafting.min_per_hour.is_some() {
         println!("Pass an item's count with --count for the same crafting steps");

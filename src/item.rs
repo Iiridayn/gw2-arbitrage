@@ -303,12 +303,8 @@ impl Item {
     pub fn recipe_unlocks(&self) -> Option<Vec<u32>> {
         match (&self.item_type, &self.details) {
             (Type::Consumable, Some(Details::Consumable(details))) => {
-                let mut unlocks = vec![];
-                if let Some(recipe_id) = details.recipe_id {
-                    unlocks.push(recipe_id);
-                } else if let Some(extra_recipe_ids) = &details.extra_recipe_ids {
-                    unlocks.extend(extra_recipe_ids);
-                }
+                let mut unlocks: Vec<u32> = details.recipe_id.into_iter().collect();
+                unlocks.extend(details.extra_recipe_ids.iter().flatten());
                 Some(unlocks)
             }
             (Type::Consumable, None) => {

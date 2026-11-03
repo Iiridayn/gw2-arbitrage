@@ -8,6 +8,7 @@ use crate::recipe::Recipe;
 use num_rational::Ratio;
 use num_traits::Zero;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -23,13 +24,119 @@ pub struct EstimatedCraftingCost {
     pub source: Source,
 }
 
+/// Recipe id to its cheapest unlock item id and estimated cost, or None if it has none with a price
+pub type RequiredUnlocks = BTreeMap<u32, Option<(u32, Money)>>;
+
+/// Items that unlock recipes, for costing recipes the account doesn't know
+pub struct RecipeUnlocks<'a> {
+    pub known_recipes: &'a Option<HashSet<u32>>,
+    // recipe id to unlock item ids
+    unlock_items: HashMap<u32, Vec<u32>>,
+    // recipes being costed, so an unlock chain can't loop back to itself
+    visiting: RefCell<HashSet<u32>>,
+}
+
+impl<'a> RecipeUnlocks<'a> {
+    pub fn new(items_map: &HashMap<u32, Item>, known_recipes: &'a Option<HashSet<u32>>) -> Self {
+        let mut unlock_items: HashMap<u32, Vec<u32>> = HashMap::new();
+        for item in items_map.values() {
+            for recipe_id in item.recipe_unlocks().into_iter().flatten() {
+                unlock_items.entry(recipe_id).or_default().push(item.id);
+            }
+        }
+        RecipeUnlocks {
+            known_recipes,
+            unlock_items,
+            visiting: Default::default(),
+        }
+    }
+
+    /// Unlock items needed for the recipes used in crafting
+    pub fn required(
+        &self,
+        crafted_items: &CraftedItems,
+        recipes_map: &HashMap<u32, Recipe>,
+        items_map: &HashMap<u32, Item>,
+        tp_prices_map: &HashMap<u32, api::Price>,
+        opt: &config::CraftingOptions,
+    ) -> RequiredUnlocks {
+        crafted_items
+            .unknown_recipes(recipes_map, self.known_recipes)
+            .into_iter()
+            .map(|recipe_id| {
+                let unlock =
+                    self.cheapest_unlock(recipe_id, recipes_map, items_map, tp_prices_map, opt);
+                (recipe_id, unlock)
+            })
+            .collect()
+    }
+
+    /// Cost of a recipe's cheapest unlock item; zero if the recipe is known
+    fn cost(
+        &self,
+        recipe: &Recipe,
+        recipes_map: &HashMap<u32, Recipe>,
+        items_map: &HashMap<u32, Item>,
+        tp_prices_map: &HashMap<u32, api::Price>,
+        opt: &config::CraftingOptions,
+    ) -> Option<Money> {
+        match recipe.id {
+            Some(id) if !recipe.is_automatic() && !self.is_known(id) => self
+                .cheapest_unlock(id, recipes_map, items_map, tp_prices_map, opt)
+                .map(|(_, cost)| cost),
+            _ => Some(Money::zero()),
+        }
+    }
+
+    fn is_known(&self, recipe_id: u32) -> bool {
+        // If we have no known recipes, assume we know none
+        self.known_recipes
+            .as_ref()
+            .is_some_and(|recipes| recipes.contains(&recipe_id))
+    }
+
+    fn cheapest_unlock(
+        &self,
+        recipe_id: u32,
+        recipes_map: &HashMap<u32, Recipe>,
+        items_map: &HashMap<u32, Item>,
+        tp_prices_map: &HashMap<u32, api::Price>,
+        opt: &config::CraftingOptions,
+    ) -> Option<(u32, Money)> {
+        if !self.visiting.borrow_mut().insert(recipe_id) {
+            return None;
+        }
+        let cheapest = self
+            .unlock_items
+            .get(&recipe_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|&item_id| {
+                let cost = calculate_estimated_min_crafting_cost(
+                    item_id,
+                    recipes_map,
+                    items_map,
+                    tp_prices_map,
+                    Some(self),
+                    opt,
+                )?;
+                Some((item_id, cost.cost))
+            })
+            .min_by_key(|&(_, cost)| cost);
+        self.visiting.borrow_mut().remove(&recipe_id);
+        cheapest
+    }
+}
+
 // Calculate the lowest cost method to obtain the given item, using only the current high/low tp prices.
 // This may involve a combination of crafting, trading and buying from vendors.
+// With unlocks, each crafted output also pays the full cost of unlocking its recipe if unknown.
 pub fn calculate_estimated_min_crafting_cost(
     item_id: u32,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
     tp_prices_map: &HashMap<u32, api::Price>,
+    unlocks: Option<&RecipeUnlocks>,
     opt: &config::CraftingOptions,
 ) -> Option<EstimatedCraftingCost> {
     let item = items_map.get(&item_id);
@@ -47,6 +154,7 @@ pub fn calculate_estimated_min_crafting_cost(
                     recipes_map,
                     items_map,
                     tp_prices_map,
+                    unlocks,
                     opt,
                 );
 
@@ -61,7 +169,11 @@ pub fn calculate_estimated_min_crafting_cost(
                 }
             }
 
-            Some(cost / output_item_count)
+            let unlock_cost = match unlocks {
+                Some(unlocks) => unlocks.cost(recipe, recipes_map, items_map, tp_prices_map, opt)?,
+                None => Money::zero(),
+            };
+            Some(cost / output_item_count + unlock_cost)
         }
     });
 
@@ -134,8 +246,6 @@ impl CraftedItems {
             .sum()
     }
 
-    // TODO: merge w/recipes? The difference is there we need all regardless of what will be
-    // crafted; here we know what will be crafted.
     pub fn unknown_recipes(
         &self,
         recipes_map: &HashMap<u32, Recipe>,
