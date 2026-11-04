@@ -281,7 +281,7 @@ impl CraftedItems {
         let recipe = recipes_map.get(&item_id).unwrap();
         for ingredient in &recipe.ingredients {
             let crafted = self.crafted.get(&ingredient.item_id).unwrap_or(&0);
-            if *crafted <= 0 {
+            if *crafted == 0 {
                 continue;
             }
             // Let each recipe which uses something get full credit for it; then
@@ -289,7 +289,7 @@ impl CraftedItems {
             ingredients.push((
                 ingredient.item_id,
                 *crafted,
-                self.sort_ingredients(ingredient.item_id, *crafted, &recipes_map),
+                self.sort_ingredients(ingredient.item_id, *crafted, recipes_map),
             ));
         }
 
@@ -480,16 +480,12 @@ pub fn calculate_precise_min_crafting_cost(
         // scale to per item
         Some(cost / output_count)
     });
-    let crafting_cost = if let Some(cost) = crafting_cost_per_item {
-        Some(cost * item_count)
-    } else {
-        None
-    };
+    let crafting_cost = crafting_cost_per_item.map(|cost| cost * item_count);
 
     let tp_cost = tp_listings_map
         .get(&item_id)
         .and_then(|listings| listings.lowest_sell_offer(item_count))
-        .and_then(|offer| Some(Money::from_copper(offer as i32)));
+        .map(|offer| Money::from_copper(offer as i32));
 
     let vendor_data = item.and_then(|item| {
         item.vendor_cost()
@@ -516,7 +512,7 @@ pub fn calculate_precise_min_crafting_cost(
         *context.items.crafted.entry(item_id).or_insert(0) += output_count;
         if output_count > item_count {
             // Should never have leftovers if we're crafting more
-            debug_assert!(context.items.leftovers.get(&item_id) == None);
+            debug_assert!(!context.items.leftovers.contains_key(&item_id));
             context.items.leftovers.insert(
                 item_id,
                 (
@@ -556,7 +552,7 @@ pub fn calculate_precise_min_crafting_cost(
         context.purchases.push((item_id, purchase, source));
         if purchase > item_count {
             // Should never still have leftovers if we're buying more
-            debug_assert!(context.items.leftovers.get(&item_id) == None);
+            debug_assert!(!context.items.leftovers.contains_key(&item_id));
             context.items.leftovers.insert(
                 item_id,
                 (purchase - item_count, cost_per_item, Source::Vendor),

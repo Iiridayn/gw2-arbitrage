@@ -72,7 +72,7 @@ where
     let modified = metadata(&data_path).and_then(|m| m.modified()).ok();
     let min_time = UNIX_EPOCH + Duration::from_secs(min_timestamp);
 
-    if modified.map_or(true, |time| time < min_time) {
+    if modified.is_none_or(|time| time < min_time) {
         match getter().await {
             Ok(items) => {
                 let file = File::create(&data_path)?;
@@ -225,7 +225,7 @@ where
 
 pub async fn fetch_account_recipes(
     key: &str,
-    cache_dir: &PathBuf,
+    cache_dir: &Path,
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<HashSet<u32>, Box<dyn std::error::Error>> {
     let base = "https://api.guildwars2.com/v2/account/recipes?access_token=";
@@ -255,7 +255,7 @@ where
         return Ok(v);
     }
 
-    let v = fetch(&url, notify).await?;
+    let v = fetch(url, notify).await?;
 
     // save cache file
     let file = File::create(cache_path)?;
@@ -273,7 +273,7 @@ where
     T: serde::de::DeserializeOwned,
 {
     if let Some(notify) = notify {
-        notify(&url.to_string());
+        notify(url);
     }
 
     let (_, body) = get(url).await?;

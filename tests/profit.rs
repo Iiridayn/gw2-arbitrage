@@ -120,38 +120,32 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
         .get_mut(&thermocatalytic_reagent_item_id)
         .unwrap()
         .sells
-        .extend(
-            vec![api::Listing {
-                listings: 1,
-                unit_price: 120,
-                quantity: 1,
-            }]
-            .into_iter(),
-        );
+        .extend(vec![api::Listing {
+            listings: 1,
+            unit_price: 120,
+            quantity: 1,
+        }]);
     tp_listings_map
         .get_mut(&plus_14_item_id)
         .unwrap()
         .sells
-        .extend(
-            vec![
-                api::Listing {
-                    listings: 7,
-                    unit_price: 1100000,
-                    quantity: 7,
-                },
-                api::Listing {
-                    listings: 2,
-                    unit_price: 1000000,
-                    quantity: 2,
-                },
-                api::Listing {
-                    listings: 1,
-                    unit_price: 800000,
-                    quantity: 1,
-                },
-            ]
-            .into_iter(),
-        );
+        .extend(vec![
+            api::Listing {
+                listings: 7,
+                unit_price: 1100000,
+                quantity: 7,
+            },
+            api::Listing {
+                listings: 2,
+                unit_price: 1000000,
+                quantity: 2,
+            },
+            api::Listing {
+                listings: 1,
+                unit_price: 800000,
+                quantity: 1,
+            },
+        ]);
     tp_listings_map.get_mut(&plus_16_item_id).unwrap().buys = vec![
         Listing {
             listings: 1,

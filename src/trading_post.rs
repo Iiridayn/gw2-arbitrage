@@ -184,7 +184,7 @@ impl From<api::ItemListings> for ItemListings {
                 .into_iter()
                 .map(|listing| Listing {
                     unit_price: listing.unit_price,
-                    quantity: listing.quantity.into(),
+                    quantity: listing.quantity,
                 })
                 .collect(),
             sells: v
@@ -192,7 +192,7 @@ impl From<api::ItemListings> for ItemListings {
                 .into_iter()
                 .map(|listing| Listing {
                     unit_price: listing.unit_price,
-                    quantity: listing.quantity.into(),
+                    quantity: listing.quantity,
                 })
                 .collect(),
             pending_buy_quantity: 0,

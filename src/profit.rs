@@ -58,9 +58,9 @@ pub fn find_profitable_items(
             cost: crafting_cost,
         }) = crafting::calculate_estimated_min_crafting_cost(
             *item_id,
-            &recipes_map,
-            &items_map,
-            &tp_prices_map,
+            recipes_map,
+            items_map,
+            tp_prices_map,
             None,
             &CONFIG.crafting,
         ) {
@@ -68,8 +68,8 @@ pub fn find_profitable_items(
                 Money::from_copper(tp_prices.buys.unit_price as i32).trading_post_sale_revenue();
             if effective_buy_price > crafting_cost {
                 profitable_item_ids.push(*item_id);
-                if let Some(recipe) = recipes_map.get(&item_id) {
-                    recipe.collect_ingredient_ids(&recipes_map, &mut ingredient_ids);
+                if let Some(recipe) = recipes_map.get(item_id) {
+                    recipe.collect_ingredient_ids(recipes_map, &mut ingredient_ids);
                 }
             }
         }
@@ -82,7 +82,7 @@ pub fn find_profitable_items(
 pub fn profitable_item_list(
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     profitable_item_ids: &Vec<u32>,
-    request_listing_item_ids: &Vec<u32>,
+    request_listing_item_ids: &[u32],
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
     tp_prices_map: &HashMap<u32, api::Price>,
@@ -92,8 +92,8 @@ pub fn profitable_item_list(
         .par_iter()
         .filter_map(|item_id| {
             let mut ingredient_ids = vec![*item_id];
-            if let Some(recipe) = recipes_map.get(&item_id) {
-                recipe.collect_ingredient_ids(&recipes_map, &mut ingredient_ids);
+            if let Some(recipe) = recipes_map.get(item_id) {
+                recipe.collect_ingredient_ids(recipes_map, &mut ingredient_ids);
             }
 
             let mut tp_listings_map_for_item: HashMap<u32, _> = HashMap::new();
@@ -106,8 +106,8 @@ pub fn profitable_item_list(
 
             calculate_crafting_profit(
                 *item_id,
-                &recipes_map,
-                &items_map,
+                recipes_map,
+                items_map,
                 &tp_listings_map_for_item,
                 None,
                 &CONFIG.crafting,
@@ -145,7 +145,7 @@ pub async fn calc_item_profit(
 > {
     let mut items_to_price = vec![];
     if let Some(recipe) = recipes_map.get(&item_id) {
-        recipe.collect_ingredient_ids(&recipes_map, &mut items_to_price);
+        recipe.collect_ingredient_ids(recipes_map, &mut items_to_price);
     }
 
     let mut request_listing_item_ids = vec![item_id];
@@ -161,8 +161,8 @@ pub async fn calc_item_profit(
     let mut purchased_ingredients = Default::default();
     let profitable_item = calculate_crafting_profit(
         item_id,
-        &recipes_map,
-        &items_map,
+        recipes_map,
+        items_map,
         &tp_listings_map,
         Some(&mut purchased_ingredients),
         &CONFIG.crafting,

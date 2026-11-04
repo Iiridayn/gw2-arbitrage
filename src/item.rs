@@ -49,7 +49,7 @@ impl From<ApiItem> for Item {
             restrictions: item.restrictions,
             upgrades_into: item.upgrades_into,
             upgrades_from: item.upgrades_from,
-            details: details,
+            details,
         }
     }
 }
@@ -232,7 +232,7 @@ impl Item {
             // Bananas, Basil Leaves, Bell Peppers, Black Beans, Kidney Beans, Rice
             12773 | 12774 | 12776 | 12777 | 12778 | 12780 => karma(49),
             // Almonds, Avocados, Cherries, Ginger Root, Limes, Sour Cream
-            12765 | 12766 | 12767 | 12768 | 12769 | 12764 => karma(77),
+            12764..=12769 => karma(77),
             // Chickpeas, Coconuts, Horseradish Root, Pears, Pinenuts, Shallots
             12781 | 12782 | 12783 | 12785 | 12786 | 12787 => karma(112),
             // Eggplants, Peaches
@@ -249,7 +249,7 @@ impl Item {
         match &self.id {
             // Base game
             // Empyreal Fragment, Dragonite Ore, Pile of Bloodstone Dust
-            46735 | 46733 | 46731 if CONFIG.ascended != None => {
+            46735 | 46733 | 46731 if CONFIG.ascended.is_some() => {
                 Some(Money::from_copper(CONFIG.ascended.unwrap() as i32))
             }
             // LW1

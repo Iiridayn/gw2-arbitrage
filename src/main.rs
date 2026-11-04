@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Without an API key, assume we know none
     let known_recipes = if let Some(key) = &CONFIG.api_key {
-        request::fetch_account_recipes(&key, &CONFIG.cache_dir, notify)
+        request::fetch_account_recipes(key, &CONFIG.cache_dir, notify)
             .await
             .unwrap_or_else(|error| {
                 eprintln!("API error fetching recipe unlocks: {}", error);
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
         // If a recipe has no disciplines it cannot be crafted or discovered.
         // This appears to be used to mark deprecated recipes in the API.
-        api_recipes.retain(|recipe| recipe.disciplines.len() > 0);
+        api_recipes.retain(|recipe| !recipe.disciplines.is_empty());
         api_recipes
     };
     println!(
@@ -70,10 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         request::get_data(&CONFIG.items_file, request::ITEMS_MIN_TIMESTAMP, || async {
             let api_items: Vec<api::ApiItem> =
                 request::request_paginated("items", &CONFIG.lang, notify).await?;
-            Ok(api_items
-                .into_iter()
-                .map(|api_item| Item::from(api_item))
-                .collect())
+            Ok(api_items.into_iter().map(Item::from).collect())
         })
         .await?;
     println!(
@@ -95,10 +92,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             {
                 return false;
             }
-            if !CONFIG.include_unknown_recipes && !recipe.is_automatic() {
-                if recipe.id.is_some_and(|id| !known_recipes.contains(&id)) {
-                    return false;
-                }
+            if !CONFIG.include_unknown_recipes
+                && !recipe.is_automatic()
+                && recipe.id.is_some_and(|id| !known_recipes.contains(&id))
+            {
+                return false;
             }
             if let Some(output_blacklist) = &CONFIG.output_blacklist {
                 if output_blacklist.contains(&recipe.output_item_id) {
@@ -152,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(&commerce_notify as &dyn Fn(&str)),
         )
         .await?;
-        println!("");
+        println!();
         println!("Loaded {} trading post prices", tp_prices.len());
 
         let tp_prices_map = profit::vec_to_map(tp_prices, |x| x.id);
@@ -356,7 +354,7 @@ fn print_profitable_item(
         profitable_item.count, item_id
     );
     use Discipline::{DoubleClick, MysticForge, Salvage};
-    let mut sorted = profitable_item.crafted_items.sorted(item_id, &recipes_map);
+    let mut sorted = profitable_item.crafted_items.sorted(item_id, recipes_map);
     let (groups, step_groups) = crafting::discipline_groups(&mut sorted);
     let mut current = None;
     let mut at_forge = false;
@@ -449,14 +447,14 @@ fn print_profitable_item(
                 "{} {}, breakeven: {} each",
                 count,
                 items_map
-                    .get(&leftover_id)
+                    .get(leftover_id)
                     .map_or_else(|| "???".to_string(), |item| item.to_string()),
                 cost.trading_post_listing_price(),
             );
         }
     }
 
-    return Ok(());
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -556,11 +554,11 @@ fn print_item_list(
 
         let crafting_seconds = profitable_item
             .crafted_items
-            .crafting_seconds(item_id, &recipes_map);
-        let profit_per_hour = profitable_item.profit_per_hour(&recipes_map);
+            .crafting_seconds(item_id, recipes_map);
+        let profit_per_hour = profitable_item.profit_per_hour(recipes_map);
 
         // e.g. "MF+Sr 400+J 400"
-        let mut sorted = profitable_item.crafted_items.sorted(item_id, &recipes_map);
+        let mut sorted = profitable_item.crafted_items.sorted(item_id, recipes_map);
         let (groups, _) = crafting::discipline_groups(&mut sorted);
         let mut labels: Vec<String> = groups
             .iter()

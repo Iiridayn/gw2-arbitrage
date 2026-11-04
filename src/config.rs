@@ -102,7 +102,7 @@ impl Config {
         config.include_unknown_recipes =
             opt.include_unknown_recipes || file.include_unknown_recipes.unwrap_or(false);
 
-        config.lang = if let Some(_) = opt.lang {
+        config.lang = if opt.lang.is_some() {
             opt.lang
         } else if let Some(code) = file.lang {
             code.parse().map_or_else(
@@ -110,7 +110,7 @@ impl Config {
                     println!("Config file: {}", e);
                     None
                 },
-                |c| Some(c),
+                Some,
             )
         } else {
             None
@@ -145,9 +145,8 @@ impl Config {
 
         let cache_dir = cache_dir(&opt.cache_dir).expect("Failed to identify cache dir");
         ensure_dir(&cache_dir).expect("Failed to create cache dir");
-        match flush_cache(&cache_dir) {
-            Err(e) => println!("Failed to flush cache dir {}: {}", &cache_dir.display(), e),
-            _ => (),
+        if let Err(e) = flush_cache(&cache_dir) {
+            println!("Failed to flush cache dir {}: {}", &cache_dir.display(), e)
         }
         config.cache_dir = cache_dir;
 
@@ -169,29 +168,26 @@ impl Config {
         config.items_file = items_path;
 
         if opt.reset_data {
-            match remove_data_file(&config.items_file) {
-                Err(e) => println!(
+            if let Err(e) = remove_data_file(&config.items_file) {
+                println!(
                     "Failed to remove file {}: {}",
                     &config.items_file.display(),
                     e
-                ),
-                _ => (),
+                )
             };
-            match remove_data_file(&config.api_recipes_file) {
-                Err(e) => println!(
+            if let Err(e) = remove_data_file(&config.api_recipes_file) {
+                println!(
                     "Failed to remove file {}: {}",
                     &config.api_recipes_file.display(),
                     e
-                ),
-                _ => (),
+                )
             };
-            match remove_data_file(&config.custom_recipes_file) {
-                Err(e) => println!(
+            if let Err(e) = remove_data_file(&config.custom_recipes_file) {
+                println!(
                     "Failed to remove file {}: {}",
                     &config.custom_recipes_file.display(),
                     e
-                ),
-                _ => (),
+                )
             };
         }
 
@@ -459,7 +455,7 @@ fn get_discipline<Discipline: FromStr + VariantNames>(
 
 fn ensure_dir(dir: &PathBuf) -> Result<&PathBuf, Box<dyn std::error::Error>> {
     if !dir.exists() {
-        std::fs::create_dir(&dir)
+        std::fs::create_dir(dir)
             .map_err(|e| format!("Failed to create '{}' ({})", dir.display(), e).into())
             .and(Ok(dir))
     } else {
@@ -486,7 +482,7 @@ fn flush_cache(cache_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     // Assume our request triggered the cache
     // Give a prefix; on Windows the user cache and user local data folders are the same
     let expired = SystemTime::now() - Duration::new(300, 0);
-    for file in fs::read_dir(&cache_dir)? {
+    for file in fs::read_dir(cache_dir)? {
         let file = file?;
         let filename = file.file_name().into_string();
         if let Ok(name) = filename {
@@ -522,7 +518,7 @@ fn data_dir(dir: &Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>
 fn remove_data_file(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     if file.exists() {
         println!("Removing existing data file at '{}'", file.display());
-        std::fs::remove_file(&file)
+        std::fs::remove_file(file)
             .map_err(|e| format!("Failed to remove '{}' ({})", file.display(), e))?;
     }
     Ok(())
@@ -539,9 +535,9 @@ fn config_file(file: &Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Er
             config_dir
         })
         .or_else(|| std::env::current_dir().ok())
-        .and_then(|mut path| {
+        .map(|mut path| {
             path.push("gw2-arbitrage.toml");
-            Some(path)
+            path
         })
         .ok_or_else(|| "Failed to access current working directory".into())
 }

@@ -111,13 +111,14 @@ pub fn one_ingredient_maps(
     (items_map, recipes_map)
 }
 
-pub fn tp_listings_map(
-    from: Vec<(u32, Vec<(u32, u32)>, Vec<(u32, u32)>)>,
-) -> HashMap<u32, ItemListings> {
+/// Item id, buy orders and sell listings, each as (unit price, quantity)
+type MockListings = (u32, Vec<(u32, u32)>, Vec<(u32, u32)>);
+
+pub fn tp_listings_map(from: Vec<MockListings>) -> HashMap<u32, ItemListings> {
     let mut map = HashMap::new();
     for (id, mut buys, mut sells) in from.into_iter() {
-        buys.sort_by(|(price1, _), (price2, _)| price1.cmp(&price2));
-        sells.sort_by(|(price1, _), (price2, _)| price1.cmp(&price2).reverse());
+        buys.sort_by(|(price1, _), (price2, _)| price1.cmp(price2));
+        sells.sort_by(|(price1, _), (price2, _)| price1.cmp(price2).reverse());
         map.insert(
             id,
             ItemListings {
