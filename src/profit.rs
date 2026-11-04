@@ -378,8 +378,8 @@ pub fn calculate_crafting_profit(
                     opt.value.is_some(),
                     recipe,
                 ) as f64;
-            let score = listing_profit.to_copper_value() as f64
-                - gold as f64 * 10000.0 * seconds / 3600.0;
+            let score =
+                listing_profit.to_copper_value() as f64 - gold as f64 * 10000.0 * seconds / 3600.0;
             if score > best_score {
                 best_score = score;
                 best_count = crafting_count;

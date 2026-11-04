@@ -2,8 +2,8 @@ use crate::api;
 use crate::config;
 use crate::item::Item;
 use crate::money::Money;
-use crate::trading_post;
 use crate::recipe::{Discipline, Recipe};
+use crate::trading_post;
 
 use num_rational::Ratio;
 use num_traits::Zero;
@@ -166,7 +166,9 @@ pub fn calculate_estimated_min_crafting_cost(
             }
 
             let unlock_cost = match unlocks {
-                Some(unlocks) => unlocks.cost(recipe, recipes_map, items_map, tp_prices_map, opt)?,
+                Some(unlocks) => {
+                    unlocks.cost(recipe, recipes_map, items_map, tp_prices_map, opt)?
+                }
                 None => Money::zero(),
             };
             Some(cost / output_item_count + unlock_cost)

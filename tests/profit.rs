@@ -241,8 +241,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
             max_sell: Money::from_copper(7982220),
             min_sell: Money::from_copper(7982200),
             // (4 * 1100000 + 3 * 1496 / 10) / (85 / 100)
-            breakeven: (Money::from_copper(1100000 * 4)
-                + (Money::from_copper(1496) / 10) * 3)
+            breakeven: (Money::from_copper(1100000 * 4) + (Money::from_copper(1496) / 10) * 3)
                 .trading_post_listing_price(),
             crafting_steps: 6,
             // 2 TP buys, 3 ingredients, output, 2 sales
@@ -648,9 +647,12 @@ fn one_ingredient_profit(
 
 #[test]
 fn calculate_crafting_profit_splits_market_actions_at_stack_size() {
-    let profitable_item =
-        one_ingredient_profit(vec![(1, 261)], vec![(999, 10), (1000, 251)], &Default::default())
-            .unwrap();
+    let profitable_item = one_ingredient_profit(
+        vec![(1, 261)],
+        vec![(999, 10), (1000, 251)],
+        &Default::default(),
+    )
+    .unwrap();
 
     // Buys of 250 and 11 of one ingredient; sales of 250 and 1 at one price and 10 at the next
     assert_eq!(profitable_item.count, 261);

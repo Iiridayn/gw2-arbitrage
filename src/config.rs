@@ -133,8 +133,9 @@ impl Config {
                 Currency::ResearchNote => (opt.rn, currencies.and_then(|c| c.rn)),
                 Currency::SpiritShard => (opt.ss, currencies.and_then(|c| c.ss)),
             };
-            config.rates[currency as usize] =
-                opt_rate.or(file_rate).and_then(Rational32::approximate_float);
+            config.rates[currency as usize] = opt_rate
+                .or(file_rate)
+                .and_then(Rational32::approximate_float);
         }
 
         if let Some(blacklists) = file.blacklist {

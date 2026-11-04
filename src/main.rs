@@ -66,19 +66,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("Loading items");
-    let items: Vec<Item> = request::get_data(
-        &CONFIG.items_file,
-        request::ITEMS_MIN_TIMESTAMP,
-        || async {
+    let items: Vec<Item> =
+        request::get_data(&CONFIG.items_file, request::ITEMS_MIN_TIMESTAMP, || async {
             let api_items: Vec<api::ApiItem> =
                 request::request_paginated("items", &CONFIG.lang, notify).await?;
             Ok(api_items
                 .into_iter()
                 .map(|api_item| Item::from(api_item))
                 .collect())
-        },
-    )
-    .await?;
+        })
+        .await?;
     println!(
         "Loaded {} items stored at '{}'",
         items.len(),
@@ -94,8 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if recipe.currency_cost().is_none() {
                 return false;
             }
-            if !CONFIG.include_mystic_forge
-                && recipe.disciplines.contains(&Discipline::MysticForge)
+            if !CONFIG.include_mystic_forge && recipe.disciplines.contains(&Discipline::MysticForge)
             {
                 return false;
             }
@@ -495,11 +491,7 @@ fn format_duration(seconds: f64) -> String {
 }
 
 /// e.g. "Am/L/T 400", or "Am/L/T (400)" with parens
-fn disciplines_label(
-    disciplines: &[Discipline],
-    rating: Option<u16>,
-    parens: bool,
-) -> String {
+fn disciplines_label(disciplines: &[Discipline], rating: Option<u16>, parens: bool) -> String {
     let abbrevs: Vec<String> = disciplines.iter().map(|d| d.get_abbrev()).collect();
     match rating {
         Some(rating) if parens => format!("{} ({})", abbrevs.join("/"), rating),

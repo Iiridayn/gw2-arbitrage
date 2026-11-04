@@ -129,10 +129,7 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
         // outputs appear to be account bound anyway, so won't be on TP.
         // There are some useful Scribe WvW BPs in the data, so ignoring all
         // normal discipline recipes would catch those too.
-        let source = if recipe
-            .disciplines
-            .contains(&Discipline::Achievement)
-        {
+        let source = if recipe.disciplines.contains(&Discipline::Achievement) {
             RecipeSource::Achievement
         } else {
             RecipeSource::Automatic

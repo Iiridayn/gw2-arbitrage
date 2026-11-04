@@ -33,7 +33,13 @@ pub enum Currency {
 use Currency::*;
 
 impl Currency {
-    pub const ALL: [Currency; 5] = [Karma, UnboundMagic, VolatileMagic, ResearchNote, SpiritShard];
+    pub const ALL: [Currency; 5] = [
+        Karma,
+        UnboundMagic,
+        VolatileMagic,
+        ResearchNote,
+        SpiritShard,
+    ];
 
     /// API currency id
     fn id(self) -> u32 {
@@ -84,15 +90,21 @@ impl Money {
         if currency_id == COIN_ID {
             return Some(Self::from_copper(count as i32));
         }
-        let currency = Currency::ALL.iter().copied().find(|c| c.id() == currency_id)?;
+        let currency = Currency::ALL
+            .iter()
+            .copied()
+            .find(|c| c.id() == currency_id)?;
         Self::from_currency(currency, count)
     }
 
     fn copper_value(&self) -> Rational32 {
-        Currency::ALL.iter().copied().fold(self.copper, |value, currency| {
-            let rate = CONFIG.rates[currency as usize].unwrap_or(Rational32::zero());
-            value + self.currencies[currency as usize] * rate
-        })
+        Currency::ALL
+            .iter()
+            .copied()
+            .fold(self.copper, |value, currency| {
+                let rate = CONFIG.rates[currency as usize].unwrap_or(Rational32::zero());
+                value + self.currencies[currency as usize] * rate
+            })
     }
     pub fn to_copper_value(&self) -> i32 {
         self.copper_value().ceil().to_integer()
@@ -171,7 +183,10 @@ impl Money {
                 return None;
             }
             let sign = if count < Rational32::zero() { "-" } else { "" };
-            Some((currency, format!("{}{}", sign, count.abs().ceil().to_integer())))
+            Some((
+                currency,
+                format!("{}{}", sign, count.abs().ceil().to_integer()),
+            ))
         })
     }
 }

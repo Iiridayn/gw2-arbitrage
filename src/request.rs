@@ -330,8 +330,7 @@ where
     T: serde::de::DeserializeOwned,
 {
     let de = &mut serde_json::Deserializer::from_slice(body);
-    serde_path_to_error::deserialize(de)
-        .map_err(|e| format!("{}: {}", endpoint(url), e).into())
+    serde_path_to_error::deserialize(de).map_err(|e| format!("{}: {}", endpoint(url), e).into())
 }
 
 /// The API's message for a failed request, if it sent one
