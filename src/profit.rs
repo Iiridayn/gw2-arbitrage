@@ -122,7 +122,7 @@ pub fn profitable_item_list(
     match CONFIG.sort {
         config::SortBy::Total => profitable_items.sort_unstable_by_key(|(item, _)| item.profit),
         config::SortBy::Hour => {
-            profitable_items.sort_by_cached_key(|(item, _)| item.profit_per_hour(recipes_map))
+            profitable_items.sort_by_cached_key(|(item, _)| item.profit_per_hour())
         }
     }
 
@@ -214,9 +214,10 @@ fn charge_unlocks(
     if !cost.is_zero() {
         item.profit = item.profit - cost;
         item.crafting_cost += cost;
-        let below_rate = CONFIG.crafting.min_per_hour.is_some_and(|gold| {
-            item.profit_per_hour(recipes_map) <= Money::from_copper(gold as i32 * 10000)
-        });
+        let below_rate = CONFIG
+            .crafting
+            .min_per_hour
+            .is_some_and(|gold| item.profit_per_hour() <= Money::from_copper(gold as i32 * 10000));
         if item.profit <= Money::zero() || below_rate {
             return None;
         }
@@ -420,6 +421,7 @@ pub fn calculate_crafting_profit(
             min_sell: Money::from_copper(min_sell as i32),
             breakeven: breakeven.trading_post_listing_price(),
             crafting_steps: crafted_items.crafting_steps(recipes_map).to_integer(),
+            crafting_seconds: crafted_items.crafting_seconds(item_id, recipes_map).round() as u32,
             market_seconds: market_seconds(
                 &tp_purchases,
                 vendor_purchases.len(),
@@ -445,6 +447,7 @@ pub struct ProfitableItem {
     pub min_sell: Money,
     pub breakeven: Money,
     pub crafting_steps: u32,
+    pub crafting_seconds: u32,
     pub market_seconds: u32,
     pub crafted_items: crafting::CraftedItems,
 }
@@ -458,9 +461,8 @@ impl ProfitableItem {
         self.profit / self.crafting_steps
     }
 
-    pub fn profit_per_hour(&self, recipes_map: &HashMap<u32, Recipe>) -> Money {
-        let seconds =
-            self.crafted_items.crafting_seconds(self.id, recipes_map) + self.market_seconds as f64;
+    pub fn profit_per_hour(&self) -> Money {
+        let seconds = (self.crafting_seconds + self.market_seconds) as f64;
         Money::from_copper((self.profit.to_copper_value() as f64 * 3600.0 / seconds) as i32)
     }
 

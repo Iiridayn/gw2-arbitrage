@@ -213,13 +213,8 @@ fn print_profitable_item(
             .get(&item_id)
             .map_or_else(|| "???".to_string(), |item| item.to_string()),
         Money::from_copper(profitable_item.profit.to_copper_value()),
-        format_duration(
-            profitable_item
-                .crafted_items
-                .crafting_seconds(item_id, recipes_map)
-                + profitable_item.market_seconds as f64
-        ),
-        profitable_item.profit_per_hour(recipes_map),
+        format_duration((profitable_item.crafting_seconds + profitable_item.market_seconds) as f64),
+        profitable_item.profit_per_hour(),
         (profitable_item.profit_on_cost() * 100_f64).round(),
     );
     let price_msg = if profitable_item.max_sell == profitable_item.min_sell {
@@ -355,7 +350,8 @@ fn print_profitable_item(
     );
     use Discipline::{DoubleClick, MysticForge, Salvage};
     let mut sorted = profitable_item.crafted_items.sorted(item_id, recipes_map);
-    let (groups, step_groups) = crafting::discipline_groups(&mut sorted);
+    let step_groups = crafting::discipline_groups(&mut sorted);
+    let labels = crafting::disciplines_labels(&sorted, &step_groups);
     let mut current = None;
     let mut at_forge = false;
     for (&(item_id, count, recipe), &group) in sorted.iter().zip(&step_groups) {
@@ -365,8 +361,7 @@ fn print_profitable_item(
             }
             at_forge = true;
         } else if let Some(group) = group {
-            let (disciplines, rating) = &groups[group];
-            let label = disciplines_label(disciplines, *rating, true);
+            let label = &labels[group];
             match current {
                 Some(c) if c != group => println!("Switch to {}:", label),
                 Some(_) if !at_forge => (),
@@ -488,16 +483,6 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
-/// e.g. "Am/L/T 400", or "Am/L/T (400)" with parens
-fn disciplines_label(disciplines: &[Discipline], rating: Option<u16>, parens: bool) -> String {
-    let abbrevs: Vec<String> = disciplines.iter().map(|d| d.get_abbrev()).collect();
-    match rating {
-        Some(rating) if parens => format!("{} ({})", abbrevs.join("/"), rating),
-        Some(rating) => format!("{} {}", abbrevs.join("/"), rating),
-        None => abbrevs.join("/"),
-    }
-}
-
 /// List profitable items to screen or CSV
 fn print_item_list(
     profitable_items: &Vec<(profit::ProfitableItem, crafting::RequiredUnlocks)>,
@@ -552,18 +537,12 @@ fn print_item_list(
 
         let recipe = recipes_map.get(&item_id).expect("Missing recipe");
 
-        let crafting_seconds = profitable_item
-            .crafted_items
-            .crafting_seconds(item_id, recipes_map);
-        let profit_per_hour = profitable_item.profit_per_hour(recipes_map);
+        let profit_per_hour = profitable_item.profit_per_hour();
 
         // e.g. "MF+Sr 400+J 400"
         let mut sorted = profitable_item.crafted_items.sorted(item_id, recipes_map);
-        let (groups, _) = crafting::discipline_groups(&mut sorted);
-        let mut labels: Vec<String> = groups
-            .iter()
-            .map(|(disciplines, rating)| disciplines_label(disciplines, *rating, false))
-            .collect();
+        let step_groups = crafting::discipline_groups(&mut sorted);
+        let mut labels = crafting::disciplines_labels(&sorted, &step_groups);
         use Discipline::MysticForge;
         if sorted
             .iter()
@@ -572,7 +551,8 @@ fn print_item_list(
             labels.insert(0, MysticForge.get_abbrev());
         }
         if labels.is_empty() {
-            labels.push(disciplines_label(&recipe.disciplines, None, false));
+            let abbrevs: Vec<String> = recipe.disciplines.iter().map(|d| d.get_abbrev()).collect();
+            labels.push(abbrevs.join("/"));
         }
 
         let output_row = OutputRow {
@@ -585,7 +565,7 @@ fn print_item_list(
             profit_per_item: profitable_item.profit_per_item().to_copper_value(),
             crafting_steps: profitable_item.crafting_steps,
             profit_per_step: profitable_item.profit_per_crafting_step().to_copper_value(),
-            crafting_seconds,
+            crafting_seconds: profitable_item.crafting_seconds as f64,
             market_seconds: profitable_item.market_seconds as f64,
             profit_per_hour: profit_per_hour.to_copper_value(),
             profit_on_cost: profitable_item.profit_on_cost(),

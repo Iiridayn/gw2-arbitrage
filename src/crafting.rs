@@ -243,7 +243,7 @@ impl CraftedItems {
                 Some(recipe.crafting_seconds(count / recipe.output_item_count))
             })
             .sum();
-        let (_, step_groups) = discipline_groups(&mut self.sorted(item_id, recipes_map));
+        let step_groups = discipline_groups(&mut self.sorted(item_id, recipes_map));
         let groups: Vec<usize> = step_groups.into_iter().flatten().collect();
         let switches = groups.windows(2).filter(|w| w[0] != w[1]).count();
         crafting + switches as f64 * CHARACTER_SWITCH_SECONDS
@@ -331,15 +331,10 @@ impl CraftedItems {
     }
 }
 
-/// Disciplines able to make every step in the group, and the highest level needed
-pub type DisciplineGroup = (Vec<Discipline>, Option<u16>);
-
 /// Group crafting station steps, starting from the most restrictive step, and
-/// reorder the steps to avoid switching back to a group; plus each step's group
-/// index. None for steps not at a crafting station (forge, salvage, …).
-pub fn discipline_groups(
-    steps: &mut Vec<(u32, u32, &Recipe)>,
-) -> (Vec<DisciplineGroup>, Vec<Option<usize>>) {
+/// reorder the steps to avoid switching back to a group. Returns each step's
+/// group index; None for steps not at a crafting station (forge, salvage, …).
+pub fn discipline_groups(steps: &mut Vec<(u32, u32, &Recipe)>) -> Vec<Option<usize>> {
     let disciplines = |recipe: &Recipe| -> Vec<Discipline> {
         let crafting = recipe.disciplines.iter().copied();
         crafting.filter(Discipline::is_crafting).collect()
@@ -347,24 +342,21 @@ pub fn discipline_groups(
     let mut order: Vec<usize> = (0..steps.len()).collect();
     order.sort_by_key(|&i| disciplines(steps[i].2).len());
 
-    let mut groups: Vec<DisciplineGroup> = vec![];
+    let mut groups: Vec<Vec<Discipline>> = vec![];
     let mut step_groups = vec![None; steps.len()];
     for i in order {
-        let recipe = steps[i].2;
-        let own = disciplines(recipe);
+        let own = disciplines(steps[i].2);
         if own.is_empty() {
             continue;
         }
         let shared = groups
             .iter()
-            .position(|(group, _)| group.iter().any(|d| own.contains(d)));
+            .position(|group| group.iter().any(|d| own.contains(d)));
         let group = shared.unwrap_or_else(|| {
-            groups.push((own.clone(), None));
+            groups.push(own.clone());
             groups.len() - 1
         });
-        let (group_disciplines, rating) = &mut groups[group];
-        group_disciplines.retain(|d| own.contains(d));
-        *rating = (*rating).max(recipe.min_rating);
+        groups[group].retain(|d| own.contains(d));
         step_groups[i] = Some(group);
     }
 
@@ -390,7 +382,36 @@ pub fn discipline_groups(
     }
     order.reverse();
     *steps = order.iter().map(|&i| steps[i]).collect();
-    (groups, order.iter().map(|&i| step_groups[i]).collect())
+    order.iter().map(|&i| step_groups[i]).collect()
+}
+
+/// Each group's shared crafting disciplines and highest level, e.g. "Am/L/T 400"
+pub fn disciplines_labels(
+    steps: &[(u32, u32, &Recipe)],
+    step_groups: &[Option<usize>],
+) -> Vec<String> {
+    let count = step_groups
+        .iter()
+        .flatten()
+        .max()
+        .map_or(0, |group| group + 1);
+    (0..count)
+        .map(|group| {
+            let recipes: Vec<&Recipe> = steps
+                .iter()
+                .zip(step_groups)
+                .filter(|(_, step_group)| **step_group == Some(group))
+                .map(|(step, _)| step.2)
+                .collect();
+            let mut shared = recipes[0].disciplines.clone();
+            shared.retain(|d| d.is_crafting() && recipes.iter().all(|r| r.disciplines.contains(d)));
+            let abbrevs: Vec<String> = shared.iter().map(Discipline::get_abbrev).collect();
+            match recipes.iter().filter_map(|r| r.min_rating).max() {
+                Some(rating) => format!("{} {}", abbrevs.join("/"), rating),
+                None => abbrevs.join("/"),
+            }
+        })
+        .collect()
 }
 
 // Calculate the lowest cost method to obtain the given item, with simulated purchases from

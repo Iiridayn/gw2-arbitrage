@@ -4,7 +4,7 @@ use common::{one_ingredient_maps, tp_listings_map, MockRecipe};
 
 use gw2_arbitrage::{
     api::RecipeIngredient,
-    crafting::{self, CraftedItems, DisciplineGroup},
+    crafting::{self, CraftedItems},
     profit::calculate_crafting_profit,
     recipe::{
         CurrencyCost,
@@ -31,49 +31,49 @@ fn recipe<const A: usize>(
     recipe
 }
 
-/// Discipline groups and each step's group, when crafting one of each recipe
-fn groups(item_id: u32, recipes: Vec<Recipe>) -> (Vec<DisciplineGroup>, Vec<Option<usize>>) {
+/// Each step's group and each group's label, when crafting one of each recipe
+fn groups(item_id: u32, recipes: Vec<Recipe>) -> (Vec<Option<usize>>, Vec<String>) {
     let crafted = CraftedItems {
         crafted: recipes.iter().map(|r| (r.output_item_id, 1)).collect(),
         leftovers: HashMap::new(),
     };
     let recipes_map = recipes.into_iter().map(|r| (r.output_item_id, r)).collect();
-    crafting::discipline_groups(&mut crafted.sorted(item_id, &recipes_map))
+    let mut steps = crafted.sorted(item_id, &recipes_map);
+    let step_groups = crafting::discipline_groups(&mut steps);
+    let labels = crafting::disciplines_labels(&steps, &step_groups);
+    (step_groups, labels)
 }
 
 #[test]
 fn sub_part_narrows_disciplines() {
     // Superior Rune of the Dragonhunter from Superior Rune of the Guardian
-    let (groups, step_groups) = groups(
+    let (step_groups, labels) = groups(
         1,
         vec![
             recipe(1, [Armorsmith, Leatherworker, Tailor], 400, &[2]),
             recipe(2, [Armorsmith], 300, &[]),
         ],
     );
-    assert_eq!(groups, [(vec![Armorsmith], Some(400))]);
     assert_eq!(step_groups, [Some(0), Some(0)]);
+    assert_eq!(labels, ["Am 400"]);
 }
 
 #[test]
 fn disjoint_disciplines_need_two_groups() {
-    let (groups, step_groups) = groups(
+    let (step_groups, labels) = groups(
         1,
         vec![
             recipe(1, [Scribe], 400, &[2]),
             recipe(2, [Jeweler], 350, &[]),
         ],
     );
-    assert_eq!(
-        groups,
-        [(vec![Jeweler], Some(350)), (vec![Scribe], Some(400))]
-    );
     assert_eq!(step_groups, [Some(0), Some(1)]);
+    assert_eq!(labels, ["J 350", "Sr 400"]);
 }
 
 #[test]
 fn forge_and_salvage_need_no_group() {
-    let (groups, step_groups) = groups(
+    let (step_groups, labels) = groups(
         1,
         vec![
             recipe(1, [MysticForge], 0, &[2, 3]),
@@ -81,8 +81,8 @@ fn forge_and_salvage_need_no_group() {
             recipe(3, [Salvage], 0, &[]),
         ],
     );
-    assert_eq!(groups, [(vec![Armorsmith, Weaponsmith], Some(400))]);
     assert_eq!(step_groups, [None, Some(0), None]);
+    assert_eq!(labels, ["Am/W 400"]);
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn vendor_preferred_over_merchant_recipe_at_equal_cost() {
 #[test]
 fn hand_off_part_is_made_first() {
     // The sort puts the Artificer part (3) before the Scribe part (2)
-    let (_, step_groups) = groups(
+    let (step_groups, _) = groups(
         1,
         vec![
             recipe(1, [Artificer], 400, &[2, 3]),

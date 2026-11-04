@@ -238,6 +238,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
             breakeven: (Money::from_copper(1100000 * 4) + (Money::from_copper(1496) / 10) * 3)
                 .trading_post_listing_price(),
             crafting_steps: 6,
+            crafting_seconds: 2,
             // 2 TP buys, 3 ingredients, output, 2 sales
             market_seconds: 10 + 18 + 3 + 10,
             crafted_items: CraftedItems { crafted, leftovers },
@@ -316,6 +317,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             min_sell: Money::from_copper(198),
             breakeven: profitable_item.as_ref().unwrap().breakeven, // inexact, test below
             crafting_steps: 1,
+            crafting_seconds: 1,
             // 2 ingredients, output, 3 price levels
             market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
@@ -358,6 +360,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             // ((2*94 + 45) / 3) / (85/100)
             breakeven: Money::from_copper(92),
             crafting_steps: 32,
+            crafting_seconds: 1,
             // 2 ingredients, output, 3 price levels
             market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
@@ -620,6 +623,7 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
             // (50 * 2 + 30) / (85/100)
             breakeven: Money::from_copper(153),
             crafting_steps: 59,
+            crafting_seconds: 2,
             // 3 ingredients, output, 2 price levels
             market_seconds: 15 + 18 + 3 + 10,
             crafted_items: CraftedItems { crafted, leftovers },
