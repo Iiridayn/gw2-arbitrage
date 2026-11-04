@@ -52,7 +52,7 @@ fn custom_recipe_splits_item_and_currency_ingredients() {
 #[test]
 fn additional_recipes_parse() {
     let recipes = custom_recipes::additional_recipes().unwrap();
-    assert_eq!(recipes.len(), 12);
+    assert_eq!(recipes.len(), 18);
     for recipe in recipes {
         Recipe::try_from(recipe).unwrap();
     }
