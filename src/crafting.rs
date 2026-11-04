@@ -29,7 +29,7 @@ pub type RequiredUnlocks = BTreeMap<u32, Option<(u32, Money)>>;
 
 /// Items that unlock recipes, for costing recipes the account doesn't know
 pub struct RecipeUnlocks<'a> {
-    pub known_recipes: &'a Option<HashSet<u32>>,
+    pub known_recipes: &'a HashSet<u32>,
     // recipe id to unlock item ids
     unlock_items: HashMap<u32, Vec<u32>>,
     // recipes being costed, so an unlock chain can't loop back to itself
@@ -37,7 +37,7 @@ pub struct RecipeUnlocks<'a> {
 }
 
 impl<'a> RecipeUnlocks<'a> {
-    pub fn new(items_map: &HashMap<u32, Item>, known_recipes: &'a Option<HashSet<u32>>) -> Self {
+    pub fn new(items_map: &HashMap<u32, Item>, known_recipes: &'a HashSet<u32>) -> Self {
         let mut unlock_items: HashMap<u32, Vec<u32>> = HashMap::new();
         for item in items_map.values() {
             for recipe_id in item.recipe_unlocks().into_iter().flatten() {
@@ -81,18 +81,11 @@ impl<'a> RecipeUnlocks<'a> {
         opt: &config::CraftingOptions,
     ) -> Option<Money> {
         match recipe.id {
-            Some(id) if !recipe.is_automatic() && !self.is_known(id) => self
+            Some(id) if !recipe.is_automatic() && !self.known_recipes.contains(&id) => self
                 .cheapest_unlock(id, recipes_map, items_map, tp_prices_map, opt)
                 .map(|(_, cost)| cost),
             _ => Some(Money::zero()),
         }
-    }
-
-    fn is_known(&self, recipe_id: u32) -> bool {
-        // If we have no known recipes, assume we know none
-        self.known_recipes
-            .as_ref()
-            .is_some_and(|recipes| recipes.contains(&recipe_id))
     }
 
     fn cheapest_unlock(
@@ -249,7 +242,7 @@ impl CraftedItems {
     pub fn unknown_recipes(
         &self,
         recipes_map: &HashMap<u32, Recipe>,
-        known_recipes: &Option<HashSet<u32>>,
+        known_recipes: &HashSet<u32>,
     ) -> HashSet<u32> {
         let mut unknown_recipes = HashSet::new();
         for item_id in self.crafted.keys() {
@@ -258,16 +251,9 @@ impl CraftedItems {
             } else {
                 continue;
             };
-            if let Some(id) = recipe.id.filter(|id| !unknown_recipes.contains(id)) {
-                if !recipe.is_automatic() {
-                    // If we have no known recipes, assume we know none
-                    if known_recipes
-                        .as_ref()
-                        .filter(|recipes| recipes.contains(&id))
-                        .is_none()
-                    {
-                        unknown_recipes.insert(id);
-                    }
+            if let Some(id) = recipe.id {
+                if !recipe.is_automatic() && !known_recipes.contains(&id) {
+                    unknown_recipes.insert(id);
                 }
             }
         }

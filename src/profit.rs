@@ -197,8 +197,8 @@ pub async fn calc_item_profit(
     Ok((profitable_item, purchased_ingredients, tp_listings_map))
 }
 
-/// Find the unlock items an item's recipes need. If the account's recipes are known, charge them
-/// to the item, and return None if it's then no longer worth crafting.
+/// Find the unlock items an item's recipes need, charge them to the item, and return None if it's
+/// then no longer worth crafting.
 fn charge_unlocks(
     mut item: ProfitableItem,
     unlocks: &crafting::RecipeUnlocks,
@@ -213,23 +213,21 @@ fn charge_unlocks(
         tp_prices_map,
         &CONFIG.crafting,
     );
-    if unlocks.known_recipes.is_some() {
-        // Can no longer be learned: Wooden Sword, Asuran Harpoon
-        if required.contains_key(&5424) || required.contains_key(&6057) {
+    // Can no longer be learned: Wooden Sword, Asuran Harpoon
+    if required.contains_key(&5424) || required.contains_key(&6057) {
+        return None;
+    }
+    // keyed by unlock item, since one can unlock several recipes
+    let costs: HashMap<u32, Money> = required.values().flatten().copied().collect();
+    let cost: Money = costs.into_values().sum();
+    if !cost.is_zero() {
+        item.profit = item.profit - cost;
+        item.crafting_cost += cost;
+        let below_rate = CONFIG.crafting.min_per_hour.is_some_and(|gold| {
+            item.profit_per_hour(recipes_map) <= Money::from_copper(gold as i32 * 10000)
+        });
+        if item.profit <= Money::zero() || below_rate {
             return None;
-        }
-        // keyed by unlock item, since one can unlock several recipes
-        let costs: HashMap<u32, Money> = required.values().flatten().copied().collect();
-        let cost: Money = costs.into_values().sum();
-        if !cost.is_zero() {
-            item.profit = item.profit - cost;
-            item.crafting_cost += cost;
-            let below_rate = CONFIG.crafting.min_per_hour.is_some_and(|gold| {
-                item.profit_per_hour(recipes_map) <= Money::from_copper(gold as i32 * 10000)
-            });
-            if item.profit <= Money::zero() || below_rate {
-                return None;
-            }
         }
     }
     Some((item, required))

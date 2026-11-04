@@ -535,7 +535,7 @@ fn calculate_crafting_profit_unknown_recipe_test() {
         profitable_item
             .unwrap()
             .crafted_items
-            .unknown_recipes(&recipes_map, &Some(known_recipes)),
+            .unknown_recipes(&recipes_map, &known_recipes),
         expected_unknown_recipes
     );
 }

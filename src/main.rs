@@ -17,16 +17,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notify_print = |url: &str| println!("Fetching {}", url);
     let notify = Some(&notify_print as &dyn Fn(&str));
 
+    // Without an API key, assume we know none
     let known_recipes = if let Some(key) = &CONFIG.api_key {
-        match request::fetch_account_recipes(&key, &CONFIG.cache_dir, notify).await {
-            Ok(recipes) => Some(recipes),
-            Err(error) => {
+        request::fetch_account_recipes(&key, &CONFIG.cache_dir, notify)
+            .await
+            .unwrap_or_else(|error| {
                 eprintln!("API error fetching recipe unlocks: {}", error);
-                None
-            }
-        }
+                HashSet::new()
+            })
     } else {
-        None
+        HashSet::new()
     };
 
     println!("Loading recipes");
@@ -94,16 +94,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if recipe.currency_cost().is_none() {
                 return false;
             }
-            if let Some(recipe_blacklist) = &CONFIG.recipe_blacklist {
-                if let Some(id) = recipe.id {
-                    if recipe_blacklist.contains(&id) {
-                        return false;
-                    }
+            if !CONFIG.include_mystic_forge
+                && recipe.disciplines.contains(&config::Discipline::MysticForge)
+            {
+                return false;
+            }
+            if !CONFIG.include_unknown_recipes && !recipe.is_automatic() {
+                if recipe.id.is_some_and(|id| !known_recipes.contains(&id)) {
+                    return false;
                 }
             }
-            if let Some(item_blacklist) = &CONFIG.item_blacklist {
+            if let Some(output_blacklist) = &CONFIG.output_blacklist {
+                if output_blacklist.contains(&recipe.output_item_id) {
+                    return false;
+                }
+            }
+            if let Some(input_blacklist) = &CONFIG.input_blacklist {
                 for ingredient in &recipe.ingredients {
-                    if item_blacklist.contains(&ingredient.item_id) {
+                    if input_blacklist.contains(&ingredient.item_id) {
                         return false;
                     }
                 }
@@ -132,7 +140,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &tp_listings_map,
             &recipes_map,
             &items_map,
-            &known_recipes,
         )?;
     } else {
         println!("Loading trading post prices");
@@ -196,7 +203,6 @@ fn print_profitable_item(
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
-    known_recipes: &Option<HashSet<u32>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (profitable_item, required_unlocks) = if let Some(item) = profitable_item {
         item
@@ -400,9 +406,10 @@ fn print_profitable_item(
             .join("\n");
         println!(
             "You {} craft this yet. Required recipes{}:\n{}",
-            match known_recipes {
-                Some(_) => "can not",
-                None => "may not be able to",
+            if CONFIG.api_key.is_some() {
+                "can not"
+            } else {
+                "may not be able to"
             },
             if required_unlocks.len() > 1 { "s" } else { "" },
             req_recipes,

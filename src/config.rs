@@ -35,6 +35,8 @@ pub struct Config {
 
     pub output_csv: Option<PathBuf>,
     pub filter_disciplines: Option<Vec<Discipline>>,
+    pub include_mystic_forge: bool,
+    pub include_unknown_recipes: bool,
     pub sort: SortBy,
     pub lang: Option<Language>,
     pub api_key: Option<String>,
@@ -49,8 +51,8 @@ pub struct Config {
     pub custom_recipes_file: PathBuf,
     pub items_file: PathBuf,
 
-    pub item_blacklist: Option<HashSet<u32>>,
-    pub recipe_blacklist: Option<HashSet<u32>>,
+    pub input_blacklist: Option<HashSet<u32>>,
+    pub output_blacklist: Option<HashSet<u32>>,
 
     pub item_id: Option<u32>,
 }
@@ -65,7 +67,6 @@ impl Config {
 
         let opt = Opt::from_args();
 
-        config.crafting.include_timegated = opt.include_timegated;
         config.crafting.count = opt.count;
         config.crafting.min_per_item = opt.min_per_item;
         config.crafting.min_per_hour = opt.min_per_hour;
@@ -92,6 +93,13 @@ impl Config {
         };
 
         config.api_key = file.api_key;
+
+        config.crafting.include_timegated =
+            opt.include_timegated || file.include_timegated.unwrap_or(false);
+        config.include_mystic_forge =
+            opt.include_mystic_forge || file.include_mystic_forge.unwrap_or(false);
+        config.include_unknown_recipes =
+            opt.include_unknown_recipes || file.include_unknown_recipes.unwrap_or(false);
 
         config.lang = if let Some(_) = opt.lang {
             opt.lang
@@ -129,8 +137,8 @@ impl Config {
         }
 
         if let Some(blacklists) = file.blacklist {
-            config.item_blacklist = blacklists.items.map(HashSet::from_iter);
-            config.recipe_blacklist = blacklists.recipes.map(HashSet::from_iter);
+            config.input_blacklist = blacklists.inputs.map(HashSet::from_iter);
+            config.output_blacklist = blacklists.outputs.map(HashSet::from_iter);
         };
 
         let cache_dir = cache_dir(&opt.cache_dir).expect("Failed to identify cache dir");
@@ -201,6 +209,9 @@ struct ConfigFile {
     // API key requires scope unlocks
     api_key: Option<String>,
     lang: Option<String>,
+    include_timegated: Option<bool>,
+    include_mystic_forge: Option<bool>,
+    include_unknown_recipes: Option<bool>,
     currencies: Option<ConfigFileCurrencySection>,
     blacklist: Option<ConfigFileBlacklistSection>,
 }
@@ -214,9 +225,10 @@ struct ConfigFileCurrencySection {
     ss: Option<f64>,
 }
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConfigFileBlacklistSection {
-    items: Option<Vec<u32>>,
-    recipes: Option<Vec<u32>>,
+    inputs: Option<Vec<u32>>,
+    outputs: Option<Vec<u32>>,
 }
 
 #[derive(StructOpt, Debug)]
@@ -224,6 +236,15 @@ struct Opt {
     /// Include timegated recipes such as Deldrimor Steel Ingot
     #[structopt(short = "t", long)]
     include_timegated: bool,
+
+    /// Include Mystic Forge recipes
+    #[structopt(short = "m", long)]
+    include_mystic_forge: bool,
+
+    /// Include recipes the account hasn't learned, charging the cheapest unlock against profit.
+    /// Without an API key, only automatically learned recipes are known
+    #[structopt(short = "u", long)]
+    include_unknown_recipes: bool,
 
     /// Output the full list of profitable recipes to this CSV file
     #[structopt(short, long, parse(from_os_str))]
@@ -326,6 +347,9 @@ static CONFIG_FILE_HELP: Lazy<String> = Lazy::new(|| {
 
     api_key = "<key-with-unlocks-scope>"
     lang = "<lang>"
+    include_timegated = true
+    include_mystic_forge = true
+    include_unknown_recipes = true
 
     [currencies]
     ascended = <opportunity cost per item>
@@ -334,6 +358,10 @@ static CONFIG_FILE_HELP: Lazy<String> = Lazy::new(|| {
     vm = <opportunity cost per Volatile Magic>
     rn = <opportunity cost per Research Note>
     ss = <opportunity cost per Spirit Shard>
+
+    [blacklist]
+    inputs = [<item ids never used as ingredients>]
+    outputs = [<item ids never crafted>]
 
 The default file location is '{}'."#,
         config_file(&None).unwrap().display()
