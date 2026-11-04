@@ -220,7 +220,9 @@ fn print_profitable_item(
             .map_or_else(|| "???".to_string(), |item| item.to_string()),
         Money::from_copper(profitable_item.profit.to_copper_value()),
         format_duration(
-            profitable_item.crafted_items.crafting_seconds(recipes_map)
+            profitable_item
+                .crafted_items
+                .crafting_seconds(item_id, recipes_map)
                 + profitable_item.market_seconds as f64
         ),
         profitable_item.profit_per_hour(recipes_map),
@@ -357,7 +359,35 @@ fn print_profitable_item(
         "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
         profitable_item.count, item_id
     );
-    for (item_id, count, recipe) in profitable_item.crafted_items.sorted(item_id, &recipes_map) {
+    use config::Discipline::{DoubleClick, MysticForge, Salvage};
+    let mut sorted = profitable_item.crafted_items.sorted(item_id, &recipes_map);
+    let (groups, step_groups) = crafting::discipline_groups(&mut sorted);
+    let mut current = None;
+    let mut at_forge = false;
+    for (&(item_id, count, recipe), &group) in sorted.iter().zip(&step_groups) {
+        if recipe.disciplines.contains(&MysticForge) {
+            if !at_forge {
+                println!("Switch to Mystic Forge:");
+            }
+            at_forge = true;
+        } else if let Some(group) = group {
+            let (disciplines, rating) = &groups[group];
+            let label = disciplines_label(disciplines, *rating, true);
+            match current {
+                Some(c) if c != group => println!("Switch to {}:", label),
+                Some(_) if !at_forge => (),
+                _ => println!("On {}:", label),
+            }
+            current = Some(group);
+            at_forge = false;
+        }
+        let action = if recipe.disciplines.contains(&Salvage) {
+            "Salvage "
+        } else if recipe.disciplines.contains(&DoubleClick) {
+            "Double click "
+        } else {
+            ""
+        };
         let num_crafted = count / recipe.output_item_count;
         let item_name = items_map
             .get(&item_id)
@@ -380,11 +410,11 @@ fn print_profitable_item(
         let ingredients = ingredients.join(" ");
         if recipe.output_item_count > 1 {
             println!(
-                "{} (makes {}) {} from {}",
-                num_crafted, count, item_name, ingredients
+                "{}{} (makes {}) {} from {}",
+                action, num_crafted, count, item_name, ingredients
             );
         } else {
-            println!("{} {} from {}", count, item_name, ingredients);
+            println!("{}{} {} from {}", action, count, item_name, ingredients);
         }
     }
 
@@ -464,6 +494,20 @@ fn format_duration(seconds: f64) -> String {
     }
 }
 
+/// e.g. "Am/L/T 400", or "Am/L/T (400)" with parens
+fn disciplines_label(
+    disciplines: &[config::Discipline],
+    rating: Option<u16>,
+    parens: bool,
+) -> String {
+    let abbrevs: Vec<String> = disciplines.iter().map(|d| d.get_abbrev()).collect();
+    match rating {
+        Some(rating) if parens => format!("{} ({})", abbrevs.join("/"), rating),
+        Some(rating) => format!("{} {}", abbrevs.join("/"), rating),
+        None => abbrevs.join("/"),
+    }
+}
+
 /// List profitable items to screen or CSV
 fn print_item_list(
     profitable_items: &Vec<(profit::ProfitableItem, crafting::RequiredUnlocks)>,
@@ -518,17 +562,32 @@ fn print_item_list(
 
         let recipe = recipes_map.get(&item_id).expect("Missing recipe");
 
-        let crafting_seconds = profitable_item.crafted_items.crafting_seconds(&recipes_map);
+        let crafting_seconds = profitable_item
+            .crafted_items
+            .crafting_seconds(item_id, &recipes_map);
         let profit_per_hour = profitable_item.profit_per_hour(&recipes_map);
+
+        // e.g. "MF+Sr 400+J 400"
+        let mut sorted = profitable_item.crafted_items.sorted(item_id, &recipes_map);
+        let (groups, _) = crafting::discipline_groups(&mut sorted);
+        let mut labels: Vec<String> = groups
+            .iter()
+            .map(|(disciplines, rating)| disciplines_label(disciplines, *rating, false))
+            .collect();
+        use config::Discipline::MysticForge;
+        if sorted
+            .iter()
+            .any(|(_, _, r)| r.disciplines.contains(&MysticForge))
+        {
+            labels.insert(0, MysticForge.get_abbrev());
+        }
+        if labels.is_empty() {
+            labels.push(disciplines_label(&recipe.disciplines, None, false));
+        }
 
         let output_row = OutputRow {
             name: name.to_string(),
-            disciplines: recipe
-                .disciplines
-                .iter()
-                .map(|d| d.get_abbrev())
-                .collect::<Vec<_>>()
-                .join("/"),
+            disciplines: labels.join("+"),
             item_id,
             unknown_recipes: required_unlocks.keys().copied().collect(),
             total_profit: profitable_item.profit.to_string(),

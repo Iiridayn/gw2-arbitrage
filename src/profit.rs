@@ -378,7 +378,7 @@ pub fn calculate_crafting_profit(
             .all(|(_, listing)| listing.pending_buy_quantity == 0));
 
         if let Some(gold) = opt.min_per_hour {
-            let seconds = crafted_items.crafting_seconds(recipes_map)
+            let seconds = crafted_items.crafting_seconds(item_id, recipes_map)
                 + market_seconds(
                     &tp_purchases,
                     vendor_purchases.len(),
@@ -518,7 +518,8 @@ impl ProfitableItem {
     }
 
     pub fn profit_per_hour(&self, recipes_map: &HashMap<u32, Recipe>) -> Money {
-        let seconds = self.crafted_items.crafting_seconds(recipes_map) + self.market_seconds as f64;
+        let seconds =
+            self.crafted_items.crafting_seconds(self.id, recipes_map) + self.market_seconds as f64;
         Money::from_copper((self.profit.to_copper_value() as f64 * 3600.0 / seconds) as i32)
     }
 

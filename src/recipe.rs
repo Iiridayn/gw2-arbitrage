@@ -34,6 +34,7 @@ pub struct Recipe {
     pub output_item_id: u32,
     pub output_item_count: u32,
     pub disciplines: Vec<config::Discipline>,
+    pub min_rating: Option<u16>, // not included in custom recipes
     pub ingredients: Vec<api::RecipeIngredient>,
     pub currencies: Vec<CurrencyCost>,
     pub time_to_craft_ms: Option<u32>, // not included in custom recipes
@@ -54,6 +55,7 @@ impl From<api::Recipe> for Recipe {
             output_item_id: recipe.output_item_id,
             output_item_count: recipe.output_item_count,
             disciplines: recipe.disciplines,
+            min_rating: Some(recipe.min_rating),
             ingredients: recipe.ingredients,
             currencies: vec![],
             time_to_craft_ms: Some(recipe.time_to_craft_ms),
@@ -107,6 +109,7 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
             output_item_id: recipe.output_item_id,
             output_item_count,
             disciplines: recipe.disciplines,
+            min_rating: None,
             ingredients,
             currencies,
             time_to_craft_ms: None,

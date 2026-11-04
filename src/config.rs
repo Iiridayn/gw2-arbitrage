@@ -470,6 +470,11 @@ pub enum Discipline {
 }
 
 impl Discipline {
+    /// Crafting professions, which are levelled per character and listed first
+    pub fn is_crafting(&self) -> bool {
+        *self as u8 <= Discipline::Scribe as u8
+    }
+
     pub fn get_abbrev(&self) -> String {
         let s = self.to_string();
         match &s[..1] {

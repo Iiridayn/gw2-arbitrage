@@ -25,7 +25,7 @@ pub struct Recipe {
     pub output_item_count: u32,
     pub time_to_craft_ms: u32,
     pub disciplines: Vec<config::Discipline>,
-    min_rating: u16,
+    pub min_rating: u16,
     flags: Vec<RecipeFlags>,
     pub ingredients: Vec<RecipeIngredient>,
 }

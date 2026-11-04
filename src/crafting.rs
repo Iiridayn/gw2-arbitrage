@@ -11,6 +11,9 @@ use num_traits::Zero;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// Logging out and in to use another character's crafting disciplines
+const CHARACTER_SWITCH_SECONDS: f64 = 30.0;
+
 #[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Source {
     Crafting,
@@ -229,14 +232,19 @@ impl CraftedItems {
     }
 
     /// Estimated seconds to craft everything, with one batch per crafted item
-    pub fn crafting_seconds(&self, recipes_map: &HashMap<u32, Recipe>) -> f64 {
-        self.crafted
+    pub fn crafting_seconds(&self, item_id: u32, recipes_map: &HashMap<u32, Recipe>) -> f64 {
+        let crafting: f64 = self
+            .crafted
             .iter()
             .filter_map(|(item_id, &count)| {
                 let recipe = recipes_map.get(item_id)?;
                 Some(recipe.crafting_seconds(count / recipe.output_item_count))
             })
-            .sum()
+            .sum();
+        let (_, step_groups) = discipline_groups(&mut self.sorted(item_id, recipes_map));
+        let groups: Vec<usize> = step_groups.into_iter().flatten().collect();
+        let switches = groups.windows(2).filter(|w| w[0] != w[1]).count();
+        crafting + switches as f64 * CHARACTER_SWITCH_SECONDS
     }
 
     pub fn unknown_recipes(
@@ -319,6 +327,68 @@ impl CraftedItems {
         self.sort_ingredients(item_id, *self.crafted.get(&item_id).unwrap(), recipes_map)
             .1
     }
+}
+
+/// Disciplines able to make every step in the group, and the highest level needed
+pub type DisciplineGroup = (Vec<config::Discipline>, Option<u16>);
+
+/// Group crafting station steps, starting from the most restrictive step, and
+/// reorder the steps to avoid switching back to a group; plus each step's group
+/// index. None for steps not at a crafting station (forge, salvage, …).
+pub fn discipline_groups(
+    steps: &mut Vec<(u32, u32, &Recipe)>,
+) -> (Vec<DisciplineGroup>, Vec<Option<usize>>) {
+    let disciplines = |recipe: &Recipe| -> Vec<config::Discipline> {
+        let crafting = recipe.disciplines.iter().copied();
+        crafting.filter(config::Discipline::is_crafting).collect()
+    };
+    let mut order: Vec<usize> = (0..steps.len()).collect();
+    order.sort_by_key(|&i| disciplines(steps[i].2).len());
+
+    let mut groups: Vec<DisciplineGroup> = vec![];
+    let mut step_groups = vec![None; steps.len()];
+    for i in order {
+        let recipe = steps[i].2;
+        let own = disciplines(recipe);
+        if own.is_empty() {
+            continue;
+        }
+        let shared = groups
+            .iter()
+            .position(|(group, _)| group.iter().any(|d| own.contains(d)));
+        let group = shared.unwrap_or_else(|| {
+            groups.push((own.clone(), None));
+            groups.len() - 1
+        });
+        let (group_disciplines, rating) = &mut groups[group];
+        group_disciplines.retain(|d| own.contains(d));
+        *rating = (*rating).max(recipe.min_rating);
+        step_groups[i] = Some(group);
+    }
+
+    // Working back from the last step, take the latest step whose output is no
+    // longer needed, preferring the current group
+    let mut remaining: Vec<usize> = (0..steps.len()).collect();
+    let mut order = vec![];
+    let mut current = None;
+    while !remaining.is_empty() {
+        let used = |i: usize| {
+            let output = steps[i].0;
+            let uses = |&j: &usize| steps[j].2.ingredients.iter().any(|g| g.item_id == output);
+            remaining.iter().any(uses)
+        };
+        let ready = || remaining.iter().rev().copied().filter(|&i| !used(i));
+        let pick = ready()
+            .find(|&i| current.is_none() || step_groups[i].is_none() || step_groups[i] == current)
+            .or_else(|| ready().next())
+            .unwrap();
+        current = step_groups[pick].or(current);
+        remaining.retain(|&i| i != pick);
+        order.push(pick);
+    }
+    order.reverse();
+    *steps = order.iter().map(|&i| steps[i]).collect();
+    (groups, order.iter().map(|&i| step_groups[i]).collect())
 }
 
 // Calculate the lowest cost method to obtain the given item, with simulated purchases from
