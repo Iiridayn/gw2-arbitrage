@@ -207,13 +207,17 @@ fn print_profitable_item(
 
     println!("============");
     println!(
-        "Shopping list for {} x {} = {} profit ({} / step, {}%)",
+        "Shopping list for {} x {} = {} profit ({}, {} / hour, {}%)",
         profitable_item.count,
         items_map
             .get(&item_id)
             .map_or_else(|| "???".to_string(), |item| item.to_string()),
         Money::from_copper(profitable_item.profit.to_copper_value()),
-        profitable_item.profit_per_crafting_step().to_copper_value(),
+        format_duration(
+            profitable_item.crafted_items.crafting_seconds(recipes_map)
+                + profitable_item.market_seconds as f64
+        ),
+        profitable_item.profit_per_hour(recipes_map),
         (profitable_item.profit_on_cost() * 100_f64).round(),
     );
     let price_msg = if profitable_item.max_sell == profitable_item.min_sell {
@@ -343,15 +347,6 @@ fn print_profitable_item(
 
     println!("============");
     println!("Max inventory slots: {}", inventory + 1); // + 1 for the crafting output
-    let crafting_seconds = profitable_item.crafted_items.crafting_seconds(&recipes_map);
-    let market_seconds = profitable_item.market_seconds();
-    println!(
-        "Time: {} ({} crafting, {} market, {} / hour)",
-        format_duration(crafting_seconds + market_seconds),
-        format_duration(crafting_seconds),
-        format_duration(market_seconds),
-        profitable_item.profit_per_hour(&recipes_map),
-    );
     println!(
         "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
         profitable_item.count, item_id
@@ -535,7 +530,7 @@ fn print_item_list(
             crafting_steps: profitable_item.crafting_steps,
             profit_per_step: profitable_item.profit_per_crafting_step().to_copper_value(),
             crafting_seconds,
-            market_seconds: profitable_item.market_seconds(),
+            market_seconds: profitable_item.market_seconds as f64,
             profit_per_hour: profit_per_hour.to_copper_value(),
             profit_on_cost: profitable_item.profit_on_cost(),
         };

@@ -9,6 +9,11 @@ use std::convert::TryFrom;
 
 use serde::{Deserialize, Serialize};
 
+/// Moving to the next recipe in the crafting interface
+const RECIPE_SWITCH_SECONDS: f64 = 1.0;
+/// Finding an ingredient on the TP or at a vendor and typing the quantity
+pub const INGREDIENT_SWITCH_SECONDS: f64 = 6.0;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RecipeSource {
     Automatic,
@@ -123,15 +128,17 @@ impl Recipe {
         let crafting_station = |base_seconds: f64| base_seconds * (2.3 + 0.16 * steps);
 
         if let Some(ms) = self.time_to_craft_ms {
-            crafting_station(ms as f64 / 1000.0)
+            RECIPE_SWITCH_SECONDS + crafting_station(ms as f64 / 1000.0)
         } else if has(MysticForge) {
-            20.0 + 2.0 * (steps - 1.0)
+            15.0 + 2.0 * (steps - 1.0)
         } else if has(DoubleClick) || has(Salvage) {
-            0.5 * steps
-        } else if has(Merchant) || has(Charge) || has(Achievement) || has(Growing) {
+            RECIPE_SWITCH_SECONDS + 0.5 * steps
+        } else if has(Merchant) {
+            INGREDIENT_SWITCH_SECONDS
+        } else if has(Charge) || has(Achievement) || has(Growing) {
             0.0
         } else {
-            crafting_station(1.0)
+            RECIPE_SWITCH_SECONDS + crafting_station(1.0)
         }
     }
 

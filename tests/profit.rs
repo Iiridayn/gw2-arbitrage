@@ -247,7 +247,8 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
                 + (Money::from_copper(1496) / 10) * 3)
                 .trading_post_listing_price(),
             crafting_steps: 6,
-            market_actions: 4, // 2 ingredients, 2 price levels
+            // 2 TP buys, 3 ingredients, output, 2 sales
+            market_seconds: 10 + 18 + 3 + 10,
             crafted_items: CraftedItems { crafted, leftovers },
         })
     );
@@ -324,7 +325,8 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             min_sell: Money::from_copper(198),
             breakeven: profitable_item.as_ref().unwrap().breakeven, // inexact, test below
             crafting_steps: 1,
-            market_actions: 5, // 2 ingredients, 3 price levels
+            // 2 ingredients, output, 3 price levels
+            market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
                 crafted,
                 leftovers: Default::default(),
@@ -365,7 +367,8 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             // ((2*94 + 45) / 3) / (85/100)
             breakeven: Money::from_copper(92),
             crafting_steps: 32,
-            market_actions: 5, // 2 ingredients, 3 price levels
+            // 2 ingredients, output, 3 price levels
+            market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
                 crafted,
                 leftovers: Default::default(),
@@ -626,7 +629,8 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
             // (50 * 2 + 30) / (85/100)
             breakeven: Money::from_copper(153),
             crafting_steps: 59,
-            market_actions: 5, // 3 ingredients, 2 price levels
+            // 3 ingredients, output, 2 price levels
+            market_seconds: 15 + 18 + 3 + 10,
             crafted_items: CraftedItems { crafted, leftovers },
         })
     );
@@ -650,10 +654,10 @@ fn calculate_crafting_profit_splits_market_actions_at_stack_size() {
         one_ingredient_profit(vec![(1, 261)], vec![(999, 10), (1000, 251)], &Default::default())
             .unwrap();
 
-    // 2 buys for 261 of one ingredient; 2 sales for 251 at one price and 1 for 10 at the next
+    // Buys of 250 and 11 of one ingredient; sales of 250 and 1 at one price and 10 at the next
     assert_eq!(profitable_item.count, 261);
-    assert_eq!(profitable_item.market_actions, 5);
-    assert_eq!(profitable_item.market_seconds(), 25.0);
+    // 2 buys, 1 ingredient, output, 3 sales less 1s of crafting, while the 11 left sell after
+    assert_eq!(profitable_item.market_seconds, 10 + 6 + 3 + 14);
 }
 
 #[test]
@@ -672,7 +676,7 @@ fn calculate_crafting_profit_min_per_hour_stops_at_best_count() {
     // At 1g / hour, 5 seconds is worth about 14c, more than the 2nd and 3rd sales earn
     let profitable_item = at_rate(1).unwrap();
     assert_eq!(profitable_item.count, 1);
-    assert_eq!(profitable_item.market_actions, 2);
+    assert_eq!(profitable_item.market_seconds, 5 + 6 + 3 + 5);
 
     // At 100g / hour, even the first sale isn't worth the time
     assert!(at_rate(100).is_none());

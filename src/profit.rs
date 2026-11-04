@@ -1,21 +1,26 @@
 use rayon::prelude::*;
 
 use num_traits::Zero;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::api;
 use crate::config;
 use crate::crafting;
 use crate::item::{Item, ITEM_STACK_SIZE};
 use crate::money::Money;
-use crate::recipe::Recipe;
+use crate::recipe::{Recipe, INGREDIENT_SWITCH_SECONDS};
 use crate::request;
-use config::CONFIG;
+use config::{Discipline::MysticForge, CONFIG};
 
 const SPARKLINE_SLICES: usize = 8;
 const SPARKLINE_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 const TP_ACTION_SECONDS: f64 = 5.0;
+/// Selling is limited to about 15 per 2 minutes
+const SALES_BEFORE_COOLDOWN: u32 = 15;
+const SALE_COOLDOWN_SECONDS: f64 = 8.0;
+/// Opening the TP on the output from the inventory
+const OUTPUT_SWITCH_SECONDS: f64 = 3.0;
 
 /// Return a items which are profitable to make at least one of, and their ingredients, for further
 /// scrutiny
@@ -260,6 +265,7 @@ pub fn calculate_crafting_profit(
     let mut crafting_count: u32 = 0;
     let mut crafted_items = crafting::CraftedItems::default();
     let mut tp_purchases: HashMap<u32, u32> = HashMap::new();
+    let mut vendor_purchases: HashSet<u32> = HashSet::new();
     let mut best_score = 0.0;
     let mut best_count = 0;
 
@@ -346,6 +352,9 @@ pub fn calculate_crafting_profit(
                 *tp_purchases.entry(*purchase_id).or_insert(0) += *count;
                 (cost, min_sell, max_sell)
             } else {
+                if let crafting::Source::Vendor = *purchase_source {
+                    vendor_purchases.insert(*purchase_id);
+                }
                 (0, 0, 0)
             };
 
@@ -372,13 +381,14 @@ pub fn calculate_crafting_profit(
 
         if let Some(gold) = opt.min_per_hour {
             let seconds = crafted_items.crafting_seconds(recipes_map)
-                + count_market_actions(
+                + market_seconds(
                     &tp_purchases,
+                    vendor_purchases.len(),
                     &buy_order_quantities,
                     crafting_count,
                     opt.value.is_some(),
-                ) as f64
-                    * TP_ACTION_SECONDS;
+                    recipe,
+                ) as f64;
             let score = listing_profit.to_copper_value() as f64
                 - gold as f64 * 10000.0 * seconds / 3600.0;
             if score > best_score {
@@ -421,11 +431,13 @@ pub fn calculate_crafting_profit(
             min_sell: Money::from_copper(min_sell as i32),
             breakeven: breakeven.trading_post_listing_price(),
             crafting_steps: crafted_items.crafting_steps(recipes_map).to_integer(),
-            market_actions: count_market_actions(
+            market_seconds: market_seconds(
                 &tp_purchases,
+                vendor_purchases.len(),
                 &buy_order_quantities,
                 crafting_count,
                 opt.value.is_some(),
+                recipe,
             ),
             crafted_items,
         })
@@ -434,19 +446,22 @@ pub fn calculate_crafting_profit(
     }
 }
 
-/// One transaction per stack bought of each ingredient, and per stack sold into each price level,
-/// since a sale can't span prices
-fn count_market_actions(
+/// Seconds spent buying and selling. One transaction per stack bought of each TP ingredient, and
+/// per stack sold into each price level, since a sale can't span prices. Sales are made while the
+/// output crafts, except at crafting stations, where a stack can't be sold until it's complete.
+fn market_seconds(
     tp_purchases: &HashMap<u32, u32>,
+    vendor_purchases: usize,
     buy_order_quantities: &[u32],
     sold: u32,
     fixed_value: bool,
+    recipe: Option<&Recipe>,
 ) -> u32 {
-    let buy_actions: u32 = tp_purchases
+    let buys: u32 = tp_purchases
         .values()
         .map(|count| count.div_ceil(ITEM_STACK_SIZE))
         .sum();
-    let sell_actions: u32 = if fixed_value {
+    let sales: u32 = if fixed_value {
         sold.div_ceil(ITEM_STACK_SIZE)
     } else {
         // buys are sorted in ascending price
@@ -461,7 +476,24 @@ fn count_market_actions(
             })
             .sum()
     };
-    buy_actions + sell_actions
+    let selling = sales.min(SALES_BEFORE_COOLDOWN) as f64 * TP_ACTION_SECONDS
+        + sales.saturating_sub(SALES_BEFORE_COOLDOWN) as f64 * SALE_COOLDOWN_SECONDS;
+    let output_crafting = recipe.map_or(0.0, |recipe| {
+        recipe.crafting_seconds(sold / recipe.output_item_count)
+    });
+    // the forge crafts one at a time, so only the last sale must wait
+    let forged = recipe.is_some_and(|recipe| recipe.disciplines.contains(&MysticForge));
+    let selling_after_crafting = if forged {
+        TP_ACTION_SECONDS
+    } else {
+        let last_stack = (sold - 1) % ITEM_STACK_SIZE + 1;
+        selling * last_stack as f64 / sold as f64
+    };
+    let seconds = buys as f64 * TP_ACTION_SECONDS
+        + (tp_purchases.len() + vendor_purchases) as f64 * INGREDIENT_SWITCH_SECONDS
+        + OUTPUT_SWITCH_SECONDS
+        + (selling - output_crafting).max(selling_after_crafting);
+    seconds.round() as u32
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -474,7 +506,7 @@ pub struct ProfitableItem {
     pub min_sell: Money,
     pub breakeven: Money,
     pub crafting_steps: u32,
-    pub market_actions: u32,
+    pub market_seconds: u32,
     pub crafted_items: crafting::CraftedItems,
 }
 
@@ -487,12 +519,8 @@ impl ProfitableItem {
         self.profit / self.crafting_steps
     }
 
-    pub fn market_seconds(&self) -> f64 {
-        self.market_actions as f64 * TP_ACTION_SECONDS
-    }
-
     pub fn profit_per_hour(&self, recipes_map: &HashMap<u32, Recipe>) -> Money {
-        let seconds = self.crafted_items.crafting_seconds(recipes_map) + self.market_seconds();
+        let seconds = self.crafted_items.crafting_seconds(recipes_map) + self.market_seconds as f64;
         Money::from_copper((self.profit.to_copper_value() as f64 * 3600.0 / seconds) as i32)
     }
 

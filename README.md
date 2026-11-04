@@ -17,7 +17,7 @@ for profit on the trading post using materials purchased from the trading post.
 The prices used assume that you buy materials at the best offer and sell the crafted items at the best bid (accounting for liquidity - see [Effects of Low Liquidity](#effects-of-low-liquidity)), so the only time
 spent waiting is during crafting.
 Items with high 'profit / hour' and 'profit on cost' values generally produce a higher return for the time invested.
-'Time' and 'profit / hour' count crafting time and market time, at 5 seconds per trading post transaction. A transaction covers up to 250 items, and each sale covers a single price.
+'Time' and 'profit / hour' count crafting time and market time: moving between recipes and ingredients, trading post transactions, and the selling cooldown. A transaction covers up to 250 items, and each sale covers a single price. Sales are assumed to be made while the output is still crafting.
 The list is sorted by total profit. Use `--sort hour` to sort by profit per hour instead; this only changes the order, and the amounts are still those which earn the most total profit.
 To choose amounts by your time instead, pass what an hour is worth to you in gold, e.g. `--min-per-hour 15`. Each item is made in the amount that earns the most over that opportunity cost, and items that can't beat it are left out. The list is then sorted by profit per hour, unless `--sort` says otherwise.
 
