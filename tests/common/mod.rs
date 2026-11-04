@@ -1,8 +1,7 @@
 use gw2_arbitrage::{
     api::{self, ItemListings, Listing, RecipeIngredient},
-    config::Discipline,
     item::Item,
-    recipe::Recipe,
+    recipe::{Discipline, Recipe},
 };
 
 use std::collections::HashMap;

@@ -4,13 +4,13 @@ use common::{one_ingredient_maps, tp_listings_map, MockItem, MockRecipe};
 
 use gw2_arbitrage::{
     api::{self, ItemListings, Listing, RecipeIngredient},
-    config::{CraftingOptions, Discipline},
+    config::CraftingOptions,
     crafting::{self, CraftedItems, PurchasedIngredient},
     custom_recipes,
     item::Item,
     money::Money,
     profit::{calculate_crafting_profit, ProfitableItem},
-    recipe::Recipe,
+    recipe::{Discipline, Recipe},
 };
 
 use std::collections::{HashMap, HashSet};

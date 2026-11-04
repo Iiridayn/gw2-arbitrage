@@ -1,5 +1,4 @@
 use crate::api;
-use crate::config;
 use crate::custom_recipes;
 use crate::money::Money;
 
@@ -8,11 +7,60 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 
 use serde::{Deserialize, Serialize};
+use strum::{Display, EnumString, EnumVariantNames};
 
 /// Moving to the next recipe in the crafting interface
 const RECIPE_SWITCH_SECONDS: f64 = 1.0;
 /// Finding an ingredient on the TP or at a vendor and typing the quantity
 pub const INGREDIENT_SWITCH_SECONDS: f64 = 6.0;
+
+#[derive(
+    Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Display, EnumString, EnumVariantNames,
+)]
+pub enum Discipline {
+    // TODO: swap these next two, next time rebuilding data files, so alphabetical
+    Artificer,
+    Armorsmith,
+    Chef,
+    Huntsman,
+    Jeweler,
+    Leatherworker,
+    Tailor,
+    Weaponsmith,
+    Scribe,
+    // A few more for compatibility with custom recipes
+    #[strum(serialize = "Mystic Forge")]
+    MysticForge,
+    #[strum(serialize = "Double Click")]
+    DoubleClick,
+    Salvage,
+    Merchant,
+    Charge,
+    Achievement,
+    Growing,
+    Homesteader,
+}
+
+impl Discipline {
+    /// Crafting professions, which are levelled per character and listed first
+    pub fn is_crafting(&self) -> bool {
+        *self as u8 <= Discipline::Scribe as u8
+    }
+
+    pub fn get_abbrev(&self) -> String {
+        let s = self.to_string();
+        match &s[..1] {
+            // take 1st and 8th characters to distinguish Merchant/Mystic Forge
+            "M" => format!("{}{}", &s[..1], &s[7..8]),
+            // take 1st and 3rd characters to distinguish Scribe/Salvage and
+            // Armorsmith/Artificer/Achievement
+            "A" | "S" => format!("{}{}", &s[..1], &s[2..3]),
+            // take 1st and 4th characters to distinguish Chef/Charge
+            "C" => format!("{}{}", &s[..1], &s[3..4]),
+            l => l.to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RecipeSource {
@@ -33,7 +81,7 @@ pub struct Recipe {
     pub id: Option<u32>,
     pub output_item_id: u32,
     pub output_item_count: u32,
-    pub disciplines: Vec<config::Discipline>,
+    pub disciplines: Vec<Discipline>,
     pub min_rating: Option<u16>, // not included in custom recipes
     pub ingredients: Vec<api::RecipeIngredient>,
     pub currencies: Vec<CurrencyCost>,
@@ -83,7 +131,7 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
         // normal discipline recipes would catch those too.
         let source = if recipe
             .disciplines
-            .contains(&config::Discipline::Achievement)
+            .contains(&Discipline::Achievement)
         {
             RecipeSource::Achievement
         } else {
@@ -121,12 +169,12 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
 impl Recipe {
     /// Estimated seconds to make one batch of this recipe
     pub fn crafting_seconds(&self, steps: u32) -> f64 {
-        use config::Discipline::{
+        use Discipline::{
             Achievement, Charge, DoubleClick, Growing, Merchant, MysticForge, Salvage,
         };
 
         let steps = steps as f64;
-        let has = |discipline: config::Discipline| self.disciplines.contains(&discipline);
+        let has = |discipline: Discipline| self.disciplines.contains(&discipline);
         // Fit of batches timed at 1s, 2s and 7s base craft times
         let crafting_station = |base_seconds: f64| base_seconds * (2.3 + 0.16 * steps);
 

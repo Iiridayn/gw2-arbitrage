@@ -2,8 +2,8 @@ use crate::api;
 use crate::config;
 use crate::item::Item;
 use crate::money::Money;
-use crate::profit;
-use crate::recipe::Recipe;
+use crate::trading_post;
+use crate::recipe::{Discipline, Recipe};
 
 use num_rational::Ratio;
 use num_traits::Zero;
@@ -330,7 +330,7 @@ impl CraftedItems {
 }
 
 /// Disciplines able to make every step in the group, and the highest level needed
-pub type DisciplineGroup = (Vec<config::Discipline>, Option<u16>);
+pub type DisciplineGroup = (Vec<Discipline>, Option<u16>);
 
 /// Group crafting station steps, starting from the most restrictive step, and
 /// reorder the steps to avoid switching back to a group; plus each step's group
@@ -338,9 +338,9 @@ pub type DisciplineGroup = (Vec<config::Discipline>, Option<u16>);
 pub fn discipline_groups(
     steps: &mut Vec<(u32, u32, &Recipe)>,
 ) -> (Vec<DisciplineGroup>, Vec<Option<usize>>) {
-    let disciplines = |recipe: &Recipe| -> Vec<config::Discipline> {
+    let disciplines = |recipe: &Recipe| -> Vec<Discipline> {
         let crafting = recipe.disciplines.iter().copied();
-        crafting.filter(config::Discipline::is_crafting).collect()
+        crafting.filter(Discipline::is_crafting).collect()
     };
     let mut order: Vec<usize> = (0..steps.len()).collect();
     order.sort_by_key(|&i| disciplines(steps[i].2).len());
@@ -398,7 +398,7 @@ pub fn calculate_precise_min_crafting_cost(
     item_count: u32,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
-    tp_listings_map: &mut BTreeMap<u32, profit::ItemListings>,
+    tp_listings_map: &mut BTreeMap<u32, trading_post::ItemListings>,
     context: &mut PreciseCraftingCostContext,
     opt: &config::CraftingOptions,
 ) -> Option<PreciseCraftingCost> {

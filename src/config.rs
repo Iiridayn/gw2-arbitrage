@@ -9,14 +9,15 @@ use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use structopt::StructOpt;
-use strum::{Display, EnumString, EnumVariantNames, VariantNames};
+use strum::{EnumString, EnumVariantNames, VariantNames};
 use toml;
 
 use lazy_static::lazy_static;
 
 use crate::money::Currency;
+use crate::recipe::Discipline;
 
 pub const CACHE_PREFIX: &str = "cache_";
 
@@ -440,54 +441,6 @@ fn get_lang<Language: FromStr + VariantNames>(
         )
         .into()
     })
-}
-
-#[derive(
-    Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Display, EnumString, EnumVariantNames,
-)]
-pub enum Discipline {
-    // TODO: swap these next two, next time rebuilding data files, so alphabetical
-    Artificer,
-    Armorsmith,
-    Chef,
-    Huntsman,
-    Jeweler,
-    Leatherworker,
-    Tailor,
-    Weaponsmith,
-    Scribe,
-    // A few more for compatibility with custom recipes
-    #[strum(serialize = "Mystic Forge")]
-    MysticForge,
-    #[strum(serialize = "Double Click")]
-    DoubleClick,
-    Salvage,
-    Merchant,
-    Charge,
-    Achievement,
-    Growing,
-    Homesteader,
-}
-
-impl Discipline {
-    /// Crafting professions, which are levelled per character and listed first
-    pub fn is_crafting(&self) -> bool {
-        *self as u8 <= Discipline::Scribe as u8
-    }
-
-    pub fn get_abbrev(&self) -> String {
-        let s = self.to_string();
-        match &s[..1] {
-            // take 1st and 8th characters to distinguish Merchant/Mystic Forge
-            "M" => format!("{}{}", &s[..1], &s[7..8]),
-            // take 1st and 3rd characters to distinguish Scribe/Salvage and
-            // Armorsmith/Artificer/Achievement
-            "A" | "S" => format!("{}{}", &s[..1], &s[2..3]),
-            // take 1st and 4th characters to distinguish Chef/Charge
-            "C" => format!("{}{}", &s[..1], &s[3..4]),
-            l => l.to_string(),
-        }
-    }
 }
 
 fn get_discipline<Discipline: FromStr + VariantNames>(

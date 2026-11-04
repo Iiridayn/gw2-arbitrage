@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::config;
 use crate::item;
+use crate::recipe;
 
 // types for /commerce/prices
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,7 +24,7 @@ pub struct Recipe {
     pub output_item_id: u32,
     pub output_item_count: u32,
     pub time_to_craft_ms: u32,
-    pub disciplines: Vec<config::Discipline>,
+    pub disciplines: Vec<recipe::Discipline>,
     pub min_rating: u16,
     flags: Vec<RecipeFlags>,
     pub ingredients: Vec<RecipeIngredient>,

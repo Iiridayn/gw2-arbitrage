@@ -1,7 +1,6 @@
 use serde::{de::Deserializer, Deserialize};
 use serde_json::Value;
 
-use crate::config;
 use crate::recipe;
 use crate::request;
 
@@ -91,7 +90,7 @@ pub struct Recipe {
     #[serde(deserialize_with = "treat_error_as_none")]
     pub output_item_count: Option<u32>,
     #[serde(deserialize_with = "strum_discipline")]
-    pub disciplines: Vec<config::Discipline>,
+    pub disciplines: Vec<recipe::Discipline>,
     pub ingredients: Vec<Ingredient>,
 }
 
@@ -142,7 +141,7 @@ where
     Ok(T::deserialize(value).ok())
 }
 
-fn strum_discipline<'de, D>(deserializer: D) -> Result<Vec<config::Discipline>, D::Error>
+fn strum_discipline<'de, D>(deserializer: D) -> Result<Vec<recipe::Discipline>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -151,11 +150,11 @@ where
     let value: Value = Deserialize::deserialize(deserializer)?;
     match value {
         Value::Array(vec) => {
-            let mut c: Vec<config::Discipline> = Vec::new();
+            let mut c: Vec<recipe::Discipline> = Vec::new();
             for val in vec.iter() {
                 if let Value::String(s) = val {
                     c.push(
-                        config::Discipline::from_str(s).map_err(|e| {
+                        recipe::Discipline::from_str(s).map_err(|e| {
                             Error::custom(format!("Unknown string \"{}\": {}", s, e))
                         })?,
                     );

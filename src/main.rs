@@ -10,7 +10,7 @@ use config::CONFIG;
 use gw2_arbitrage::*;
 use item::{Item, ITEM_STACK_SIZE};
 use money::Money;
-use recipe::Recipe;
+use recipe::{Discipline, Recipe};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return false;
             }
             if !CONFIG.include_mystic_forge
-                && recipe.disciplines.contains(&config::Discipline::MysticForge)
+                && recipe.disciplines.contains(&Discipline::MysticForge)
             {
                 return false;
             }
@@ -240,7 +240,7 @@ fn print_profitable_item(
     let sale_sparkline = match tp_listings_map.get(&item_id) {
         Some(listings) if CONFIG.crafting.value.is_none() => format!(
             " {}",
-            profit::listing_sparkline(&listings.buys, profitable_item.count)
+            trading_post::listing_sparkline(&listings.buys, profitable_item.count)
         ),
         _ => String::new(),
     };
@@ -304,7 +304,7 @@ fn print_profitable_item(
                 let sparkline = tp_listings_map
                     .get(ingredient_id)
                     .map_or_else(String::new, |listings| {
-                        profit::listing_sparkline(&listings.sells, ingredient.count)
+                        trading_post::listing_sparkline(&listings.sells, ingredient.count)
                     });
                 if ingredient.max_price == ingredient.min_price {
                     format!(
@@ -359,7 +359,7 @@ fn print_profitable_item(
         "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
         profitable_item.count, item_id
     );
-    use config::Discipline::{DoubleClick, MysticForge, Salvage};
+    use Discipline::{DoubleClick, MysticForge, Salvage};
     let mut sorted = profitable_item.crafted_items.sorted(item_id, &recipes_map);
     let (groups, step_groups) = crafting::discipline_groups(&mut sorted);
     let mut current = None;
@@ -496,7 +496,7 @@ fn format_duration(seconds: f64) -> String {
 
 /// e.g. "Am/L/T 400", or "Am/L/T (400)" with parens
 fn disciplines_label(
-    disciplines: &[config::Discipline],
+    disciplines: &[Discipline],
     rating: Option<u16>,
     parens: bool,
 ) -> String {
@@ -574,7 +574,7 @@ fn print_item_list(
             .iter()
             .map(|(disciplines, rating)| disciplines_label(disciplines, *rating, false))
             .collect();
-        use config::Discipline::MysticForge;
+        use Discipline::MysticForge;
         if sorted
             .iter()
             .any(|(_, _, r)| r.disciplines.contains(&MysticForge))
