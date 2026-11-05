@@ -18,13 +18,14 @@ The prices used assume that you buy materials at the best offer and sell the cra
 spent waiting is during crafting.
 Items with high 'profit / hour' and 'profit on cost' values generally produce a higher return for the time invested.
 'Time' and 'profit / hour' count crafting time and market time: moving between recipes and ingredients, trading post transactions, and the selling cooldown. A transaction covers up to 250 items, and each sale covers a single price. Sales are assumed to be made while the output is still crafting.
-The list is sorted by total profit. Use `--sort hour` to sort by profit per hour instead; this only changes the order, and the amounts are still those which earn the most total profit.
+The list is sorted by total profit. Use `--sort hour` to sort by profit per hour, or `--sort roi` by return on investment.
 To choose amounts by your time instead, pass what an hour is worth to you in gold, e.g. `--min-per-hour 15`. Each item is made in the amount that earns the most over that opportunity cost, and items that can't beat it are left out. The list is then sorted by profit per hour, unless `--sort` says otherwise.
 
     ![List of items](screen1.png)
 
 1. Pass an item id as input (e.g. `gw2-arbitrage.exe 11538`) to print a shopping list for the item, which considers the total available liquidity for each ingredient on the trading post.
 The shopping list will also include items that should be purchased from crafting station vendors.
+Instead of an id, `--name` takes the start of each word of the item's name, in any order (e.g. `gw2-arbitrage.exe --name "bo si"` for Bolt of Silk); if several items match, they are listed with their ids.
 
     ![List of materials](screen2.png)
 

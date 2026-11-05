@@ -189,19 +189,30 @@ impl Money {
             ))
         })
     }
+
+    /// Coin and other currencies as separate strings, each empty when zero; lets tables align coin
+    pub fn split_display(&self) -> (String, String) {
+        let coin = if self.copper.is_zero() {
+            String::new()
+        } else {
+            self.format_copper()
+        };
+        let currencies: Vec<String> = self
+            .currency_units()
+            .map(|(currency, units)| format!("{} {}", units, currency.abbrev()))
+            .collect();
+        (coin, currencies.join(", "))
+    }
 }
 impl fmt::Display for Money {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut currencies = Vec::new();
-
-        if self.copper != Rational32::zero() {
-            currencies.push(self.format_copper());
-        }
-        for (currency, units) in self.currency_units() {
-            currencies.push(format!("{} {}", units, currency.abbrev()));
-        }
-
-        write!(f, "{}", currencies.join(", "))
+        let (coin, currencies) = self.split_display();
+        let sep = if coin.is_empty() || currencies.is_empty() {
+            ""
+        } else {
+            ", "
+        };
+        write!(f, "{}{}{}", coin, sep, currencies)
     }
 }
 impl Default for Money {

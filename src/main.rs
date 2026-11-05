@@ -124,7 +124,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let unlocks = crafting::RecipeUnlocks::new(&items_map, &known_recipes);
 
-    if let Some(item_id) = CONFIG.item_id {
+    let item_id = match &CONFIG.name {
+        Some(query) => match find_item_by_name(query, &recipes_map, &items_map) {
+            Some(item_id) => Some(item_id),
+            None => return Ok(()),
+        },
+        None => CONFIG.item_id,
+    };
+
+    if let Some(item_id) = item_id {
         let (profitable_item, purchased_ingredients, tp_listings_map) =
             profit::calc_item_profit(item_id, &recipes_map, &items_map, &unlocks, notify).await?;
         print_profitable_item(
@@ -189,6 +197,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Find the craftable item with a word starting with each query word, in any order. An exact name
+/// wins over longer ones; prints the candidates or why there are none, if not exactly one.
+fn find_item_by_name(
+    query: &str,
+    recipes_map: &HashMap<u32, Recipe>,
+    items_map: &HashMap<u32, Item>,
+) -> Option<u32> {
+    let query = query.to_lowercase();
+    let words: Vec<&str> = query.split_whitespace().collect();
+    let mut matches: Vec<(&Item, String)> = recipes_map
+        .keys()
+        .filter_map(|id| items_map.get(id))
+        .map(|item| (item, item.name.to_lowercase()))
+        .filter(|(_, name)| {
+            words
+                .iter()
+                .all(|word| name.split_whitespace().any(|n| n.starts_with(word)))
+        })
+        .collect();
+
+    let exact: Vec<u32> = matches
+        .iter()
+        .filter(|(_, name)| *name == words.join(" "))
+        .map(|(item, _)| item.id)
+        .collect();
+    if let [item_id] = exact[..] {
+        return Some(item_id);
+    }
+    match matches.len() {
+        0 => println!("No craftable item matches; check -m, -u and the blacklists"),
+        1 => return Some(matches[0].0.id),
+        count => {
+            const SHOWN: usize = 20;
+            println!("{} items match; pass an item id instead:", count);
+            matches.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+            for (item, _) in matches.iter().take(SHOWN) {
+                println!("{:>8} {}", item.id, item);
+            }
+            if count > SHOWN {
+                println!("...and {} more", count - SHOWN);
+            }
+        }
+    }
+    None
+}
+
 /// Print detailed information about a profitable item
 fn print_profitable_item(
     item_id: u32,
@@ -201,7 +255,17 @@ fn print_profitable_item(
     let (profitable_item, required_unlocks) = if let Some(item) = profitable_item {
         item
     } else {
-        println!("Item is not profitable to craft");
+        if !recipes_map.contains_key(&item_id) {
+            println!("No usable recipe; check -m, -u and the blacklists");
+        } else if CONFIG.crafting.value.is_none()
+            && tp_listings_map
+                .get(&item_id)
+                .is_none_or(|listings| listings.buys.is_empty())
+        {
+            println!("No buy orders on the trading post; pass --value to price it");
+        } else {
+            println!("Item is not profitable to craft");
+        }
         return Ok(());
     };
 
@@ -485,7 +549,7 @@ fn format_duration(seconds: f64) -> String {
 
 /// List profitable items to screen or CSV
 fn print_item_list(
-    profitable_items: &Vec<(profit::ProfitableItem, crafting::RequiredUnlocks)>,
+    profitable_items: &[(profit::ProfitableItem, crafting::RequiredUnlocks)],
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -505,23 +569,39 @@ fn print_item_list(
     .iter()
     .cycle();
 
-    let header = format!(
-        "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
-        "Name",
-        "Disciplines",
-        "Item id",
-        "Req. Recipe Ids",
-        "Total profit",
-        "No. required",
-        "Profit / item",
-        "Time",
-        "Profit / hour",
-        "Profit on cost",
-    );
+    // (heading, align left)
+    let columns = [
+        ("Name", true),
+        ("Disciplines", true),
+        ("Item id", false),
+        ("Recipes", false),
+        ("Total profit", true),
+        ("Count", false),
+        // ("Profit / item", false),
+        ("Time", false),
+        ("Profit / hr", false),
+        ("ROI", false),
+    ];
+    let header = columns.map(|(heading, _)| heading.to_string());
 
-    println!("{}", header);
-    println!("{}", "=".repeat(header.len()));
-    for (profitable_item, required_unlocks) in profitable_items {
+    // Total profit pads coin and other currencies separately, so the gold lines up
+    let totals: Vec<(String, String)> = profitable_items
+        .iter()
+        .map(|(item, _)| {
+            let (coin, currencies) = item.profit.split_display();
+            let sep = match (coin.is_empty(), currencies.is_empty()) {
+                (_, true) => "",
+                (true, false) => "  ",
+                (false, false) => ", ",
+            };
+            (coin, format!("{}{}", sep, currencies))
+        })
+        .collect();
+    let coin_width = totals.iter().map(|(coin, _)| coin.len()).max().unwrap_or(0);
+    let rest_width = totals.iter().map(|(_, rest)| rest.len()).max().unwrap_or(0);
+
+    let mut rows = vec![];
+    for ((profitable_item, required_unlocks), (coin, rest)) in profitable_items.iter().zip(totals) {
         // Only required when prices are cached.
         // Profit may end up being 0, since potential profitable items are selected based
         // on cached prices, but the actual profit is calculated using detailed listings and
@@ -575,11 +655,10 @@ fn print_item_list(
             writer.serialize(&output_row)?;
         }
 
-        let line = format!(
-            "{:<50} {:<15} {:<15} {:<20} {:>15} {:>15} {:>15} {:>15} {:>15} {:>15}",
+        rows.push([
             output_row.name,
             output_row.disciplines,
-            format!("{}", output_row.item_id),
+            output_row.item_id.to_string(),
             required_unlocks
                 .iter()
                 .map(|(recipe_id, unlock)| match unlock {
@@ -588,33 +667,51 @@ fn print_item_list(
                 })
                 .collect::<Vec<String>>()
                 .join(","),
-            output_row.total_profit,
-            format!(
-                "{} item{}",
-                output_row.number_required,
-                if output_row.number_required > 1 {
-                    "s"
-                } else {
-                    ""
-                }
-            ),
-            format!("{} / item", output_row.profit_per_item),
+            format!("{:>coin_width$}{:<rest_width$}", coin, rest),
+            output_row.number_required.to_string(),
+            // Money::from_copper(output_row.profit_per_item).to_string(),
             format_duration(output_row.crafting_seconds + output_row.market_seconds),
             format!("{}/hr", profit_per_hour),
-            format!("{}%", (output_row.profit_on_cost * 100_f64).round())
-        );
-
-        println!("{}", line.color(*line_colors.next().unwrap()));
+            format!("{}%", (output_row.profit_on_cost * 100_f64).round()),
+        ]);
     }
 
-    println!("{}", "=".repeat(header.len()));
+    let mut widths = header.each_ref().map(|cell| cell.chars().count());
+    for row in &rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let format_row = |row: &[String]| {
+        row.iter()
+            .zip(widths)
+            .zip(columns)
+            .map(|((cell, w), (_, left))| {
+                if left {
+                    format!("{:<w$}", cell)
+                } else {
+                    format!("{:>w$}", cell)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(" ")
+    };
+    let header = format_row(&header);
+    let rule = "=".repeat(header.chars().count());
+
     println!("{}", header);
-    println!("{}", "=".repeat(header.len()));
+    println!("{}", rule);
+    for row in &rows {
+        println!("{}", format_row(row).color(*line_colors.next().unwrap()));
+    }
+    println!("{}", rule);
+    println!("{}", header);
+    println!("{}", rule);
 
     let total_profit: Money = profitable_items.iter().map(|(item, _)| item.profit).sum();
     println!("Total: {}", total_profit);
     if CONFIG.crafting.min_per_hour.is_some() {
-        println!("Pass an item's count with --count for the same crafting steps");
+        println!("Pass the same --min-per-hour with an item id for the same crafting steps");
     }
 
     if let Some(writer) = &mut csv_writer {

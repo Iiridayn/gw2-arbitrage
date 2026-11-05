@@ -124,6 +124,8 @@ pub fn profitable_item_list(
         config::SortBy::Hour => {
             profitable_items.sort_by_cached_key(|(item, _)| item.profit_per_hour())
         }
+        config::SortBy::Roi => profitable_items
+            .sort_by(|(a, _), (b, _)| a.profit_on_cost().total_cmp(&b.profit_on_cost())),
     }
 
     profitable_items

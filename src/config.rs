@@ -56,6 +56,7 @@ pub struct Config {
     pub output_blacklist: Option<HashSet<u32>>,
 
     pub item_id: Option<u32>,
+    pub name: Option<String>,
 }
 
 lazy_static! {
@@ -76,6 +77,7 @@ impl Config {
         config.output_csv = opt.output_csv;
 
         config.item_id = opt.item_id;
+        config.name = opt.name;
 
         config.filter_disciplines = opt.filter_disciplines;
 
@@ -251,6 +253,11 @@ struct Opt {
     /// Print a shopping list of ingredients for the given item id
     item_id: Option<u32>,
 
+    /// Print a shopping list for the item whose name has words starting with each of these, in
+    /// any order (e.g. "bo si" for Bolt of Silk)
+    #[structopt(long, conflicts_with = "item-id")]
+    name: Option<String>,
+
     /// Limit the maximum number of items produced for a recipe
     #[structopt(short, long)]
     count: Option<u32>,
@@ -271,7 +278,7 @@ struct Opt {
     #[structopt(short = "d", long = "disciplines", use_delimiter = true, help = &DISCIPLINES_HELP, parse(try_from_str = get_discipline))]
     filter_disciplines: Option<Vec<Discipline>>,
 
-    /// Sort the item list by "total" profit or profit per "hour". Defaults to "hour" with
+    /// Sort the item list by "total" profit, profit per "hour", or "roi". Defaults to "hour" with
     /// --min-per-hour, otherwise "total"
     #[structopt(long, parse(try_from_str = get_sort))]
     sort: Option<SortBy>,
@@ -381,6 +388,7 @@ pub enum SortBy {
     #[default]
     Total,
     Hour,
+    Roi,
 }
 
 fn get_sort<SortBy: FromStr + VariantNames>(
