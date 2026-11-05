@@ -251,8 +251,10 @@ pub fn calculate_crafting_profit(
         .collect();
 
     let recipe = recipes_map.get(&item_id);
-    let output_item_count = recipe.map(|recipe| recipe.output_item_count).unwrap_or(1);
-    let min_profit = Money::from_copper(opt.min_per_item.unwrap_or(0) as i32) * output_item_count;
+    let output = |items: &crafting::CraftedItems| {
+        recipe.map(|recipe| (recipe, items.crafted[&item_id] / recipe.output_item_count))
+    };
+    let min_profit = Money::from_copper(opt.min_per_item.unwrap_or(0) as i32);
 
     let mut listing_profit = Money::zero();
     let mut total_crafting_cost = Money::zero();
@@ -272,16 +274,12 @@ pub fn calculate_crafting_profit(
     // why the loop stopped
     let stop: String;
 
-    // simulate crafting 1 item per loop iteration until it becomes unprofitable
+    // simulate crafting 1 item per loop iteration until it becomes unprofitable; the rest of a
+    // batch is taken from leftovers
     loop {
-        if let Some(count) = opt.count {
-            if crafting_count + output_item_count > count {
-                stop = format!(
-                    "--count {} is less than one batch ({})",
-                    count, output_item_count
-                );
-                break;
-            }
+        if opt.count.is_some_and(|count| crafting_count >= count) {
+            stop = "Reached --count".to_string();
+            break;
         }
 
         let mut context = crafting::PreciseCraftingCostContext {
@@ -291,7 +289,7 @@ pub fn calculate_crafting_profit(
 
         let crafting_cost = match crafting::calculate_precise_min_crafting_cost(
             item_id,
-            output_item_count,
+            1,
             recipes_map,
             items_map,
             &mut tp_listings_map,
@@ -315,8 +313,8 @@ pub fn calculate_crafting_profit(
                     } else {
                         "on the TP"
                     },
-                    cost / output_item_count,
-                    crafting / output_item_count
+                    cost,
+                    crafting
                 );
                 break;
             }
@@ -327,11 +325,11 @@ pub fn calculate_crafting_profit(
         };
 
         let (buy_price, min_buy) = if let Some(price) = opt.value {
-            (Money::from_copper(price as i32) * output_item_count, price)
+            (Money::from_copper(price as i32), price)
         } else if let Some((buy_price, min_buy)) = tp_listings_map
             .get_mut(&item_id)
             .unwrap_or_else(|| panic!("Missing listings for item id: {}", item_id))
-            .sell(output_item_count)
+            .sell(1)
         {
             (buy_price, min_buy)
         } else {
@@ -343,25 +341,25 @@ pub fn calculate_crafting_profit(
         if buy_price < crafting_cost + min_profit {
             stop = format!(
                 "Crafting costs {} each, {} ({} each)",
-                crafting_cost / output_item_count,
+                crafting_cost,
                 if buy_price < crafting_cost {
                     "more than it sells for"
                 } else {
                     "too close to its sale price for --min-per-item"
                 },
-                buy_price / output_item_count
+                buy_price
             );
             break;
         }
 
         listing_profit += buy_price - crafting_cost;
         total_crafting_cost += crafting_cost;
-        crafting_count += output_item_count;
+        crafting_count += 1;
         crafted_items = context.items;
 
         min_sell = min_buy;
         // Breakeven is based on the last/most expensive to craft
-        breakeven = crafting_cost / output_item_count;
+        breakeven = crafting_cost;
 
         // Finalize purchases
         for (purchase_id, count, purchase_source) in &context.purchases {
@@ -422,7 +420,7 @@ pub fn calculate_crafting_profit(
                     &buy_order_quantities,
                     crafting_count,
                     opt.value.is_some(),
-                    recipe,
+                    output(&crafted_items),
                 ) as f64;
             score -= gold as f64 * 10000.0 * seconds / 3600.0;
         }
@@ -477,7 +475,7 @@ pub fn calculate_crafting_profit(
             &buy_order_quantities,
             crafting_count,
             opt.value.is_some(),
-            recipe,
+            output(&crafted_items),
         ),
         crafted_items,
     })

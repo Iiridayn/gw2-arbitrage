@@ -233,6 +233,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         (item_id, vec![(198, 47), (199, 50), (200, 1)], vec![]),
     ]);
 
+    // A batch of 99 sells into the 98 buy orders, and the last one is left over
     recipes_map.get_mut(&item_id).unwrap().output_item_count = 99;
     let profitable_item = calculate_crafting_profit(
         item_id,
@@ -242,7 +243,30 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         None,
         &Default::default(),
     );
-    assert!(profitable_item.is_err());
+    let crafting_cost = Money::from_copper(43 + 90 + 92);
+    assert_eq!(
+        profitable_item,
+        Ok(ProfitableItem {
+            id: item_id,
+            crafting_cost,
+            count: 98,
+            profit: calc_revenue(vec![(47, 198), (50, 199), (1, 200)]) - crafting_cost,
+            max_sell: Money::from_copper(200),
+            min_sell: Money::from_copper(198),
+            breakeven: profitable_item.as_ref().unwrap().breakeven,
+            crafting_steps: 1,
+            crafting_seconds: 1,
+            // 2 ingredients, output, 3 price levels
+            market_seconds: 10 + 12 + 3 + 15,
+            crafted_items: CraftedItems {
+                crafted: HashMap::from([(item_id, 99)]),
+                leftovers: HashMap::from([(
+                    item_id,
+                    (1, crafting_cost / 99, crafting::Source::Crafting)
+                )]),
+            },
+        })
+    );
 
     recipes_map.get_mut(&item_id).unwrap().output_item_count = 98;
     let profitable_item = calculate_crafting_profit(
@@ -295,27 +319,33 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         None,
         &Default::default(),
     );
-    let crafting_cost = Money::from_copper(43 + 45 * 31 + 90 + 92 * 33 + 94 * 30);
-    let mut crafted = HashMap::new();
-    crafted.insert(item_id, 96);
+    // 33 batches: the last sells 2 into the last buy orders, and 1 is left over
+    let crafting_cost = Money::from_copper(43 + 45 * 32 + 90 + 92 * 33 + 94 * 32);
     assert_eq!(
         profitable_item,
         Ok(ProfitableItem {
             id: item_id,
             crafting_cost,
-            count: 96,
-            profit: calc_revenue(vec![(45, 198), (50, 199), (1, 200)]) - crafting_cost,
+            count: 98,
+            profit: calc_revenue(vec![(47, 198), (50, 199), (1, 200)]) - crafting_cost,
             max_sell: Money::from_copper(200),
             min_sell: Money::from_copper(198),
             // ((2*94 + 45) / 3) / (85/100)
             breakeven: Money::from_copper(92),
-            crafting_steps: 32,
+            crafting_steps: 33,
             crafting_seconds: 1,
             // 2 ingredients, output, 3 price levels
             market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
-                crafted,
-                leftovers: Default::default(),
+                crafted: HashMap::from([(item_id, 99)]),
+                leftovers: HashMap::from([(
+                    item_id,
+                    (
+                        1,
+                        Money::from_copper(2 * 94 + 45) / 3,
+                        crafting::Source::Crafting
+                    )
+                )]),
             },
         })
     );
@@ -734,6 +764,16 @@ fn silk_insignia_patches(patch_price: u32) -> u32 {
         (19747, vec![], vec![(200, 10000)]),
     ]);
     crafted_ingredients(19859, 20, 72194, &items_map, &recipes_map, &tp_listings_map)
+}
+
+#[test]
+fn calculate_crafting_profit_makes_the_count_asked_for_from_part_of_a_batch() {
+    let items_map = mock_items(&[(1, "Batch of 3", 0), (2, "Part", 0)]);
+    let recipes_map = mock_recipes(&[(1, 3, &[(2, 1)])]);
+    let tp_listings_map = tp_listings_map(vec![(2, vec![], vec![(10, 1000)])]);
+    // 4 batches for 10, with 2 left over
+    let crafted = crafted_ingredients(1, 10, 1, &items_map, &recipes_map, &tp_listings_map);
+    assert_eq!(crafted, 12);
 }
 
 #[test]
