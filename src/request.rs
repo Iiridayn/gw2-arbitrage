@@ -29,14 +29,14 @@ pub const ITEMS_MIN_TIMESTAMP: u64 = 1793535619;
 
 const PARALLEL_REQUESTS: usize = 10;
 const MAX_ATTEMPTS: u32 = 4;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+pub const LARGE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_PAGE_SIZE: i32 = 200; // https://wiki.guildwars2.com/wiki/API:2#Paging
 const MAX_ITEM_ID_LENGTH: i32 = 200; // error returned for greater than this amount
 
 // Shared so requests reuse connections
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
         .build()
         .expect("Failed to build HTTP client")
 });
@@ -163,7 +163,7 @@ where
     if let Some(notify) = notify {
         notify(&url);
     }
-    let (headers, body) = match get(&url).await {
+    let (headers, body) = match get(&url, REQUEST_TIMEOUT).await {
         Ok(response) => response,
         Err(e) if e.to_string().contains("page out of range") => return Ok(vec![]),
         Err(e) => return Err(e),
@@ -205,7 +205,7 @@ where
             if let Some(cache_dir) = cache_dir {
                 cached_fetch::<Vec<T>>(&url, cache_dir, notify).await
             } else {
-                fetch::<Vec<T>>(&url, None).await
+                fetch::<Vec<T>>(&url, None, REQUEST_TIMEOUT).await
             }
         }
     });
@@ -228,14 +228,18 @@ pub async fn fetch_account_recipes(
     cache_dir: &Path,
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<HashSet<u32>, Box<dyn std::error::Error>> {
-    let base = "https://api.guildwars2.com/v2/account/recipes?access_token=";
-    let url = format!("{}{}", base, key);
-    if let Some(notify) = notify {
-        let display = format!("{}{}", base, "<api-key>");
-        let private = |_url: &str| notify(&display);
-        Ok(cached_fetch(&url, cache_dir, Some(&private as &dyn Fn(&str))).await?)
-    } else {
-        Ok(cached_fetch(&url, cache_dir, None).await?)
+    let url = format!(
+        "https://api.guildwars2.com/v2/account/recipes?access_token={}",
+        key
+    );
+    cached_fetch(&url, cache_dir, notify).await
+}
+
+/// Mask the API key, which is always the last query parameter
+fn redact(url: &str) -> String {
+    match url.split_once("access_token=") {
+        Some((base, _)) => format!("{}access_token=<api-key>", base),
+        None => url.to_string(),
     }
 }
 
@@ -250,12 +254,16 @@ where
 {
     let cache_path = url_to_cache_path(url, cache_dir);
     if let Ok(file) = File::open(&cache_path) {
+        if notify.is_some() {
+            let age = file.metadata()?.created()?.elapsed().unwrap_or_default();
+            println!("Using cached {} from {}s ago", redact(url), age.as_secs());
+        }
         let stream = DeflateDecoder::new(file);
         let v = deserialize_from(stream)?;
         return Ok(v);
     }
 
-    let v = fetch(url, notify).await?;
+    let v = fetch(url, notify, REQUEST_TIMEOUT).await?;
 
     // save cache file
     let file = File::create(cache_path)?;
@@ -268,24 +276,27 @@ where
 pub async fn fetch<T>(
     url: &str,
     notify: Option<&dyn Fn(&str)>,
+    timeout: Duration,
 ) -> Result<T, Box<dyn std::error::Error>>
 where
     T: serde::de::DeserializeOwned,
 {
     if let Some(notify) = notify {
-        notify(url);
+        notify(&redact(url));
     }
 
-    let (_, body) = get(url).await?;
+    let (_, body) = get(url, timeout).await?;
     parse(url, &body)
 }
 
-/// GET a url, retrying failures which may be temporary. Errors leave out the query string, since
-/// it may contain the API key.
-async fn get(url: &str) -> Result<(HeaderMap, Vec<u8>), Box<dyn std::error::Error>> {
+/// GET a url, retrying failures which may be temporary. Errors mask the API key.
+async fn get(
+    url: &str,
+    timeout: Duration,
+) -> Result<(HeaderMap, Vec<u8>), Box<dyn std::error::Error>> {
     let mut attempt = 1;
     loop {
-        let failure = match CLIENT.get(url).send().await {
+        let failure = match CLIENT.get(url).timeout(timeout).send().await {
             Ok(response) => {
                 let status = response.status();
                 let headers = response.headers().clone();
@@ -297,7 +308,7 @@ async fn get(url: &str) -> Result<(HeaderMap, Vec<u8>), Box<dyn std::error::Erro
                     Ok(body) => {
                         let text = error_text(status, &body);
                         if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
-                            return Err(format!("{}: {}", endpoint(url), text).into());
+                            return Err(format!("{}: {}", redact(url), text).into());
                         }
                         text
                     }
@@ -308,11 +319,11 @@ async fn get(url: &str) -> Result<(HeaderMap, Vec<u8>), Box<dyn std::error::Erro
         };
 
         if attempt >= MAX_ATTEMPTS {
-            return Err(format!("{}: {}", endpoint(url), failure).into());
+            return Err(format!("{}: {}", redact(url), failure).into());
         }
         eprintln!(
             "{}: {}; retrying ({}/{})",
-            endpoint(url),
+            redact(url),
             failure,
             attempt,
             MAX_ATTEMPTS - 1
@@ -330,7 +341,7 @@ where
     T: serde::de::DeserializeOwned,
 {
     let de = &mut serde_json::Deserializer::from_slice(body);
-    serde_path_to_error::deserialize(de).map_err(|e| format!("{}: {}", endpoint(url), e).into())
+    serde_path_to_error::deserialize(de).map_err(|e| format!("{}: {}", redact(url), e).into())
 }
 
 /// The API's message for a failed request, if it sent one
@@ -339,10 +350,6 @@ fn error_text(status: StatusCode, body: &[u8]) -> String {
         .ok()
         .and_then(|error| error.get("text")?.as_str().map(str::to_string))
         .unwrap_or_else(|| status.to_string())
-}
-
-fn endpoint(url: &str) -> &str {
-    url.split('?').next().unwrap_or(url)
 }
 
 fn url_to_cache_path(url: &str, cache_dir: &Path) -> PathBuf {

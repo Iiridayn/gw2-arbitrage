@@ -102,7 +102,8 @@ pub async fn fetch_custom_recipes(
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<Vec<recipe::Recipe>, Box<dyn std::error::Error>> {
     let url = "https://raw.githubusercontent.com/Peureki/custom-recipes/refs/heads/schema-update/recipes.json";
-    let custom_recipes: Vec<Recipe> = request::fetch(url, notify).await?;
+    let custom_recipes: Vec<Recipe> =
+        request::fetch(url, notify, request::LARGE_DOWNLOAD_TIMEOUT).await?;
 
     let recipes: Vec<recipe::Recipe> = custom_recipes
         .into_iter()
