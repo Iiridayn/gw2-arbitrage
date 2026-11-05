@@ -134,6 +134,19 @@ impl ItemListings {
         Some((revenue, min_buy))
     }
 
+    /// Revenue from selling up to `count` into buy orders, best price first, without selling
+    pub fn sale_revenue(&self, mut count: u32) -> Money {
+        let mut revenue = Money::zero();
+        // buys are sorted in ascending price
+        for listing in self.buys.iter().rev() {
+            let sold = listing.quantity.min(count);
+            revenue +=
+                Money::from_copper(listing.unit_price as i32).trading_post_sale_revenue() * sold;
+            count -= sold;
+        }
+        revenue
+    }
+
     /// Quantity left at the lowest sell price, after pending buys
     pub fn lowest_price_quantity(&self) -> Option<u32> {
         let mut pending_buy_quantity = self.pending_buy_quantity;

@@ -165,10 +165,11 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
     );
 
     // One reagent is bought from the TP; the vendor's 149.6 beats the next listing at 178, so the
-    // other 5 come from a pack of 10
+    // other 5 come from a pack of 10, and the 5 left over are sold into buy orders at 148
     let vendor_reagent = Money::from_copper(1496) / 10;
     let crafting_cost =
-        Money::from_copper(800000 + 2 * 1000000 + 5 * 1100000 + 120) + vendor_reagent * 5;
+        Money::from_copper(800000 + 2 * 1000000 + 5 * 1100000 + 120) + vendor_reagent * 10;
+    let leftover_revenue = Money::from_copper(148).trading_post_sale_revenue() * 5;
     assert_eq!(
         profitable_item,
         Some(ProfitableItem {
@@ -176,6 +177,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
             crafting_cost,
             count: 2,
             profit: Money::from_copper(7982220 + 7982200).trading_post_sale_revenue()
+                + leftover_revenue
                 - crafting_cost,
             max_sell: Money::from_copper(7982220),
             min_sell: Money::from_copper(7982200),
@@ -548,7 +550,8 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
         + (30 + 50 + 20) // +1 = 6
         + (50 * 2 * 11 + 21 * 11) // +11 = 17
         + (50 * 2 * 30 + 25 * 5 * 6) // +30 = 47
-        + (50 * 2 * 4 + 30 * 4), // +4 = 51
+        + (50 * 2 * 4 + 30 * 4) // +4 = 51
+        + 30, // the leftover, sold for its cost
     );
     // One leftover, not profitable at 100
     let mut leftovers: HashMap<u32, (u32, Money, crafting::Source)> = HashMap::new();
@@ -565,7 +568,8 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
             id: 1000,
             crafting_cost,
             count: 51,
-            profit: calc_revenue(vec![(50, 155), (1, 200)]) - crafting_cost,
+            profit: calc_revenue(vec![(50, 155), (1, 200)]) + Money::from_copper(30)
+                - crafting_cost,
             max_sell: Money::from_copper(200),
             min_sell: Money::from_copper(155),
             // (50 * 2 + 30) / (85/100)

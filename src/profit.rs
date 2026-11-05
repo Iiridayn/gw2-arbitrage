@@ -371,6 +371,10 @@ pub fn calculate_crafting_profit(
             .iter()
             .all(|(_, listing)| listing.pending_buy_quantity == 0));
 
+        let (leftover_cost, leftover_revenue) =
+            value_leftovers(&crafted_items.leftovers, &tp_listings_map);
+        let mut score =
+            (listing_profit + leftover_revenue - leftover_cost).to_copper_value() as f64;
         if let Some(gold) = opt.min_per_hour {
             let seconds = crafted_items.crafting_seconds(item_id, recipes_map)
                 + market_seconds(
@@ -381,62 +385,76 @@ pub fn calculate_crafting_profit(
                     opt.value.is_some(),
                     recipe,
                 ) as f64;
-            let score =
-                listing_profit.to_copper_value() as f64 - gold as f64 * 10000.0 * seconds / 3600.0;
-            if score > best_score {
-                best_score = score;
-                best_count = crafting_count;
-            }
+            score -= gold as f64 * 10000.0 * seconds / 3600.0;
+        }
+        if score > best_score {
+            best_score = score;
+            best_count = crafting_count;
         }
     }
 
-    if opt.min_per_hour.is_some() {
-        if best_count == 0 {
-            return None;
+    // Stop at the most profitable count, after selling leftovers and, with --min-per-hour, the
+    // time spent
+    if best_count == 0 {
+        return None;
+    }
+    if best_count < crafting_count {
+        if let Some(purchased_ingredients) = &mut purchased_ingredients {
+            purchased_ingredients.clear();
         }
-        if best_count < crafting_count {
-            if let Some(purchased_ingredients) = &mut purchased_ingredients {
-                purchased_ingredients.clear();
-            }
-            return calculate_crafting_profit(
-                item_id,
-                recipes_map,
-                items_map,
-                api_listings_map,
-                purchased_ingredients,
-                &config::CraftingOptions {
-                    count: Some(best_count),
-                    min_per_hour: None,
-                    ..*opt
-                },
-            );
-        }
+        return calculate_crafting_profit(
+            item_id,
+            recipes_map,
+            items_map,
+            api_listings_map,
+            purchased_ingredients,
+            &config::CraftingOptions {
+                count: Some(best_count),
+                min_per_hour: None,
+                ..*opt
+            },
+        );
     }
 
-    if crafting_count > 0 && !listing_profit.is_zero() {
-        Some(ProfitableItem {
-            id: item_id,
-            crafting_cost: total_crafting_cost,
-            profit: listing_profit,
-            count: crafting_count,
-            max_sell: Money::from_copper(max_sell as i32),
-            min_sell: Money::from_copper(min_sell as i32),
-            breakeven: breakeven.trading_post_listing_price(),
-            crafting_steps: crafted_items.crafting_steps(recipes_map).to_integer(),
-            crafting_seconds: crafted_items.crafting_seconds(item_id, recipes_map).round() as u32,
-            market_seconds: market_seconds(
-                &tp_purchases,
-                vendor_purchases.len(),
-                &buy_order_quantities,
-                crafting_count,
-                opt.value.is_some(),
-                recipe,
-            ),
-            crafted_items,
-        })
-    } else {
-        None
+    let (leftover_cost, leftover_revenue) =
+        value_leftovers(&crafted_items.leftovers, &tp_listings_map);
+    Some(ProfitableItem {
+        id: item_id,
+        crafting_cost: total_crafting_cost + leftover_cost,
+        profit: listing_profit + leftover_revenue - leftover_cost,
+        count: crafting_count,
+        max_sell: Money::from_copper(max_sell as i32),
+        min_sell: Money::from_copper(min_sell as i32),
+        breakeven: breakeven.trading_post_listing_price(),
+        crafting_steps: crafted_items.crafting_steps(recipes_map).to_integer(),
+        crafting_seconds: crafted_items.crafting_seconds(item_id, recipes_map).round() as u32,
+        market_seconds: market_seconds(
+            &tp_purchases,
+            vendor_purchases.len(),
+            &buy_order_quantities,
+            crafting_count,
+            opt.value.is_some(),
+            recipe,
+        ),
+        crafted_items,
+    })
+}
+
+/// Cost of the leftovers, and their revenue sold into buy orders, at most their cost; nothing if
+/// there are none, e.g. account bound items
+fn value_leftovers(
+    leftovers: &HashMap<u32, (u32, Money, crafting::Source)>,
+    tp_listings_map: &BTreeMap<u32, ItemListings>,
+) -> (Money, Money) {
+    let mut cost = Money::zero();
+    let mut revenue = Money::zero();
+    for (id, &(count, cost_per_item, _)) in leftovers {
+        cost += cost_per_item * count;
+        if let Some(listings) = tp_listings_map.get(id) {
+            revenue += listings.sale_revenue(count).min(cost_per_item * count);
+        }
     }
+    (cost, revenue)
 }
 
 #[derive(Debug, Eq, PartialEq)]
