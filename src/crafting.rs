@@ -511,13 +511,8 @@ pub fn calculate_precise_min_crafting_cost(
     let vendor_data = item.and_then(|item| {
         item.vendor_cost()
             .or_else(|| item.token_value().map(|v| (v, 1)))
-            .map(|cost| (cost.0 * item_count, cost.1))
     });
-    let vendor_cost = if let Some((cost, _)) = vendor_data {
-        Some(cost)
-    } else {
-        None
-    };
+    let vendor_cost = vendor_data.map(|(cost_per_item, _)| cost_per_item * item_count);
     let cost = tp_cost.inner_min(crafting_cost).inner_min(vendor_cost)?;
 
     // if costs are equal, prefer the trading post, then the vendor, then crafting

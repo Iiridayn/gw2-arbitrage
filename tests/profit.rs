@@ -680,6 +680,124 @@ fn calculate_crafting_profit_min_per_hour_stops_at_best_count() {
     assert!(at_rate(100).is_none());
 }
 
+/// Mock items; real ids where `vendor_cost` matches on id
+fn mock_items(items: &[(u32, &str, u32)]) -> HashMap<u32, Item> {
+    let items = items
+        .iter()
+        .map(|&(id, name, value)| (id, Item::mock(id, name, value)));
+    items.collect()
+}
+
+/// Output id, output count, and (ingredient id, count)s
+type MockRecipeSpec<'a> = (u32, u32, &'a [(u32, u32)]);
+
+fn mock_recipes(recipes: &[MockRecipeSpec]) -> HashMap<u32, Recipe> {
+    let recipe = |&(id, count, ingredients): &MockRecipeSpec| {
+        let ingredients: Vec<RecipeIngredient> = ingredients
+            .iter()
+            .map(|&(item_id, count)| RecipeIngredient { item_id, count })
+            .collect();
+        (id, Recipe::mock(id, id, count, [], &ingredients, true))
+    };
+    recipes.iter().map(recipe).collect()
+}
+
+/// How many of `ingredient_id` are crafted for `count` of the item, valued high
+fn crafted_ingredients(
+    item_id: u32,
+    count: u32,
+    ingredient_id: u32,
+    items_map: &HashMap<u32, Item>,
+    recipes_map: &HashMap<u32, Recipe>,
+    tp_listings_map: &HashMap<u32, ItemListings>,
+) -> u32 {
+    let opt = CraftingOptions {
+        value: Some(100000),
+        count: Some(count),
+        ..Default::default()
+    };
+    let profitable_item =
+        calculate_crafting_profit(item_id, recipes_map, items_map, tp_listings_map, None, &opt)
+            .unwrap();
+    assert_eq!(profitable_item.count, count);
+    let crafted = profitable_item.crafted_items.crafted.get(&ingredient_id);
+    crafted.copied().unwrap_or(0)
+}
+
+/// Bowls of Baker's Dry Ingredients crafted for 120 Homemade Campfire Treats (x12, 8 bowls
+/// each); a bowl's 4 ingredients are sold by vendors in 10s at 8c, so it costs 32 to craft
+fn campfire_treat_bowls(bowl_price: u32) -> u32 {
+    let items_map = mock_items(&[
+        (95421, "Homemade Campfire Treat", 0),
+        (12169, "Bowl of Baker's Dry Ingredients", 3),
+        (12155, "Bag of Sugar", 1),
+        (91702, "Pile of Powdered Gelatin Mix", 48),
+        (12229, "Chocolate Bar", 1),
+        (12136, "Bag of Flour", 1),
+        (12151, "Packet of Baking Powder", 1),
+        (12153, "Packet of Salt", 1),
+    ]);
+    let recipes_map = mock_recipes(&[
+        (
+            95421,
+            12,
+            &[(12155, 12), (91702, 3), (12229, 6), (12169, 8)],
+        ),
+        (12169, 1, &[(12136, 1), (12151, 1), (12153, 1), (12155, 1)]),
+    ]);
+    let tp_listings_map = tp_listings_map(vec![
+        (12169, vec![], vec![(bowl_price, 10000)]),
+        (12229, vec![], vec![(10, 10000)]),
+    ]);
+    crafted_ingredients(
+        95421,
+        120,
+        12169,
+        &items_map,
+        &recipes_map,
+        &tp_listings_map,
+    )
+}
+
+/// Silk Patches (x5) crafted for 20 Carrion Embroidered Silk Insignias (1 patch each); a
+/// patch's 25 Spools of Silk Thread are sold by vendors in 10s at 48c
+fn silk_insignia_patches(patch_price: u32) -> u32 {
+    let items_map = mock_items(&[
+        (19859, "Carrion Embroidered Silk Insignia", 32),
+        (72194, "Silk Patch", 7),
+        (24341, "Large Bone", 11),
+        (19735, "Cured Thick Leather Square", 7),
+        (19747, "Bolt of Silk", 7),
+        (19791, "Spool of Silk Thread", 6),
+    ]);
+    let recipes_map = mock_recipes(&[
+        (19859, 1, &[(72194, 1), (24341, 8)]),
+        (72194, 5, &[(19735, 10), (19747, 4), (19791, 25)]),
+    ]);
+    // A batch of 5 patches is 10 * 100 + 4 * 200 + 25 * 48 = 3000, 600 each
+    let tp_listings_map = tp_listings_map(vec![
+        (72194, vec![], vec![(patch_price, 10000)]),
+        (24341, vec![], vec![(10, 10000)]),
+        (19735, vec![], vec![(100, 10000)]),
+        (19747, vec![], vec![(200, 10000)]),
+    ]);
+    crafted_ingredients(19859, 20, 72194, &items_map, &recipes_map, &tp_listings_map)
+}
+
+#[test]
+fn calculate_crafting_profit_buys_sub_ingredient_at_or_below_crafting_cost() {
+    assert_eq!(campfire_treat_bowls(32), 0);
+    assert_eq!(campfire_treat_bowls(31), 0);
+    assert_eq!(silk_insignia_patches(600), 0);
+    assert_eq!(silk_insignia_patches(599), 0);
+}
+
+#[test]
+fn calculate_crafting_profit_keeps_crafting_cheaper_sub_ingredient_with_vendor_leftovers() {
+    assert_eq!(campfire_treat_bowls(33), 80);
+    assert_eq!(silk_insignia_patches(601), 20);
+}
+
 mod data {
     use super::*;
 
