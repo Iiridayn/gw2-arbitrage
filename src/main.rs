@@ -406,6 +406,24 @@ fn print_profitable_item(
         );
     }
 
+    // Mystic Forge recipes with an ingredient repeated need its stack split, once for all of them
+    let mut splits: HashMap<u32, usize> = HashMap::new();
+    for id in profitable_item.crafted_items.crafted.keys() {
+        let recipe = &recipes_map[id];
+        if !recipe.disciplines.contains(&Discipline::MysticForge) {
+            continue;
+        }
+        for ingredient in &recipe.ingredients {
+            let copies = recipe
+                .ingredients
+                .iter()
+                .filter(|i| i.item_id == ingredient.item_id);
+            let split = splits.entry(ingredient.item_id).or_default();
+            *split = (*split).max(copies.count() - 1);
+        }
+    }
+    inventory += splits.values().sum::<usize>() as u32;
+
     println!("============");
     println!("Max inventory slots: {}", inventory + 1); // + 1 for the crafting output
     println!(

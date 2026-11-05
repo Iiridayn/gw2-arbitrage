@@ -254,6 +254,11 @@ impl Recipe {
     }
 }
 
+/// Output ids of recipes which use their own output, directly or through other recipes. Which
+/// recipe in a multi-item cycle is marked follows the map's iteration order, so it can change
+/// between runs. Only a few Mystic Forge items vary this way, e.g. 36059, 36060, 36061 (Plastic
+/// Fangs, Chattering Skull, Nougat Center), 46730 (Bloodstone Brick), 79653, 79661
+/// (Phospholuminescent Infusions), 91171, 91222 (Condensed Ley-Line Essences)
 pub fn mark_recursive_recipes(recipes_map: &HashMap<u32, Recipe>) -> HashSet<u32> {
     let mut set = HashSet::new();
     for (recipe_id, recipe) in recipes_map {

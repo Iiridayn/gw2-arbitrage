@@ -270,7 +270,8 @@ impl CraftedItems {
         unknown_recipes
     }
 
-    /// Sort in the order which will remove ingredients from the inventory fastest
+    /// Sort in the order which will remove ingredients from the inventory fastest; also returns
+    /// the items consumed by this step and the steps under it
     fn sort_ingredients<'a>(
         &self,
         item_id: u32,
@@ -288,26 +289,23 @@ impl CraftedItems {
             // only add it once to the crafting list once weights are determined
             ingredients.push((
                 ingredient.item_id,
-                *crafted,
                 self.sort_ingredients(ingredient.item_id, *crafted, recipes_map),
             ));
         }
 
-        // Some MF recipes have the same item/count repeated
-        ingredients.sort_by(|a, b| {
-            if a.1 == b.1 {
-                b.0.cmp(&a.0)
-            } else {
-                b.1.cmp(&a.1)
-            }
+        // Put first the ingredient whose steps consume the most items, to empty the inventory
+        // fastest; ties go to the higher item id
+        ingredients.sort_by(|(a_id, (a_sum, _)), (b_id, (b_sum, _))| {
+            b_sum.cmp(a_sum).then(b_id.cmp(a_id))
         });
 
         let mut sorted = Vec::new();
-        let mut sum = 0;
+        let consumed: u32 = recipe.ingredients.iter().map(|i| i.count).sum();
+        let mut sum = consumed * count / recipe.output_item_count;
         let mut used = HashSet::new();
         for ingredient in ingredients.iter() {
-            sum += ingredient.2 .0;
-            for &subingredient in ingredient.2 .1.iter() {
+            sum += ingredient.1 .0;
+            for &subingredient in ingredient.1 .1.iter() {
                 if used.contains(&subingredient.0) {
                     continue;
                 }
