@@ -413,8 +413,47 @@ pub fn disciplines_labels(
 }
 
 // Calculate the lowest cost method to obtain the given item, with simulated purchases from
-// the trading post.
+// the trading post. Each TP price level is priced separately, so cheap listings can be bought
+// and the rest crafted. The source is Crafting only if every level was crafted.
 pub fn calculate_precise_min_crafting_cost(
+    item_id: u32,
+    item_count: u32,
+    recipes_map: &HashMap<u32, Recipe>,
+    items_map: &HashMap<u32, Item>,
+    tp_listings_map: &mut BTreeMap<u32, trading_post::ItemListings>,
+    context: &mut PreciseCraftingCostContext,
+    opt: &config::CraftingOptions,
+) -> Option<PreciseCraftingCost> {
+    let mut total = PreciseCraftingCost {
+        cost: Money::zero(),
+        source: Source::Crafting,
+    };
+    let mut remaining = item_count;
+    while remaining > 0 {
+        let level = tp_listings_map
+            .get(&item_id)
+            .and_then(|listings| listings.lowest_price_quantity());
+        let count = level.map_or(remaining, |quantity| quantity.min(remaining));
+        let chunk = price_from_one_source(
+            item_id,
+            count,
+            recipes_map,
+            items_map,
+            tp_listings_map,
+            context,
+            opt,
+        )?;
+        total.cost += chunk.cost;
+        if chunk.source != Source::Crafting {
+            total.source = chunk.source;
+        }
+        remaining -= count;
+    }
+    Some(total)
+}
+
+// Price all of item_count from the cheapest single source
+fn price_from_one_source(
     item_id: u32,
     item_count: u32,
     recipes_map: &HashMap<u32, Recipe>,

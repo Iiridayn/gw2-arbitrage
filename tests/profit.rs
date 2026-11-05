@@ -3,7 +3,7 @@ mod common;
 use common::{one_ingredient_maps, tp_listings_map, MockItem, MockRecipe};
 
 use gw2_arbitrage::{
-    api::{self, ItemListings, Listing, RecipeIngredient},
+    api::{ItemListings, RecipeIngredient},
     config::CraftingOptions,
     crafting::{self, CraftedItems, PurchasedIngredient},
     custom_recipes,
@@ -106,62 +106,35 @@ fn calculate_crafting_profit_agony_infusion_unprofitable_test() {
 #[test]
 fn calculate_crafting_profit_agony_infusion_profitable_test() {
     let data::TestData {
+        item_id,
         items_map,
         recipes_map,
         mut tp_listings_map,
-        ..
     } = data::agony_infusions();
-
-    let thermocatalytic_reagent_item_id = 46747;
-    let plus_14_item_id = 49437;
-    let plus_16_item_id = 49439;
-
-    tp_listings_map
-        .get_mut(&thermocatalytic_reagent_item_id)
-        .unwrap()
-        .sells
-        .extend(vec![api::Listing {
-            listings: 1,
-            unit_price: 120,
-            quantity: 1,
-        }]);
-    tp_listings_map
-        .get_mut(&plus_14_item_id)
-        .unwrap()
-        .sells
-        .extend(vec![
-            api::Listing {
-                listings: 7,
-                unit_price: 1100000,
-                quantity: 7,
-            },
-            api::Listing {
-                listings: 2,
-                unit_price: 1000000,
-                quantity: 2,
-            },
-            api::Listing {
-                listings: 1,
-                unit_price: 800000,
-                quantity: 1,
-            },
-        ]);
-    tp_listings_map.get_mut(&plus_16_item_id).unwrap().buys = vec![
-        Listing {
-            listings: 1,
-            unit_price: 7982200,
-            quantity: 1,
-        },
-        Listing {
-            listings: 1,
-            unit_price: 7982220,
-            quantity: 1,
-        },
-    ];
+    let (reagent_id, plus_14_id) = (46747, 49437);
+    // Adds a reagent at 120 and ten cheap +14s to the base listings
+    tp_listings_map.extend(common::tp_listings_map(vec![
+        (
+            reagent_id,
+            vec![(147, 59999), (148, 50790)],
+            vec![(179, 33570), (178, 15136), (120, 1)],
+        ),
+        (
+            plus_14_id,
+            vec![(1900958, 1), (1900960, 4)],
+            vec![
+                (2489189, 1),
+                (2489188, 1),
+                (1100000, 7),
+                (1000000, 2),
+                (800000, 1),
+            ],
+        ),
+    ]));
 
     let mut purchased_ingredients = HashMap::new();
     let profitable_item = calculate_crafting_profit(
-        plus_16_item_id,
+        item_id,
         &recipes_map,
         &items_map,
         &tp_listings_map,
@@ -169,79 +142,54 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
         &Default::default(),
     );
 
-    let mut purchased_ingredients = purchased_ingredients.into_iter().collect::<Vec<_>>();
+    let mut purchased_ingredients: Vec<_> = purchased_ingredients.into_iter().collect();
     purchased_ingredients.sort_by_key(|(key, _)| *key);
+    let bought = |count, min, max, total| PurchasedIngredient {
+        count,
+        min_price: Money::from_copper(min),
+        max_price: Money::from_copper(max),
+        total_cost: Money::from_copper(total),
+    };
+    use crafting::Source::{TradingPost, Vendor};
     assert_eq!(
         purchased_ingredients,
         vec![
+            ((reagent_id, TradingPost), bought(1, 120, 120, 120)),
+            // the vendor's minimum purchase
+            ((reagent_id, Vendor), bought(10, 0, 0, 0)),
             (
-                (
-                    thermocatalytic_reagent_item_id,
-                    crafting::Source::TradingPost
-                ),
-                PurchasedIngredient {
-                    count: 2,
-                    min_price: Money::from_copper(120),
-                    max_price: Money::from_copper(178),
-                    total_cost: Money::from_copper(298),
-                }
-            ),
-            (
-                (thermocatalytic_reagent_item_id, crafting::Source::Vendor),
-                PurchasedIngredient {
-                    count: 10, // min purchase quantity
-                    min_price: Money::from_copper(0),
-                    max_price: Money::from_copper(0),
-                    total_cost: Money::from_copper(0),
-                }
-            ),
-            (
-                (plus_14_item_id, crafting::Source::TradingPost),
-                PurchasedIngredient {
-                    count: 8,
-                    min_price: Money::from_copper(800000),
-                    max_price: Money::from_copper(1100000),
-                    total_cost: Money::from_copper(8300000),
-                }
+                (plus_14_id, TradingPost),
+                bought(8, 800000, 1100000, 8300000)
             ),
         ]
     );
 
-    // NB: two reagents are purchased from the tp because that amount appears first in the recipe
-    // and the average cost for two items is lower than from the vendor.
-    // ideally only one reagent would be purchased from the tp, but that would introduce complexity.
-    // +14 upgrade costs, then TP-purchased reagents used in the first two crafts,
-    // then the fractional vendor cost of the four remaining reagents bought in bundles of 10.
-    let plus_14_crafting_cost = Money::from_copper(800000 + 2 * 1000000 + 5 * 1100000);
-    let tp_reagent_cost = Money::from_copper(120 + 178);
-    let vendor_reagent_cost = (Money::from_copper(1496) / 10) * 4;
-    let crafting_cost = plus_14_crafting_cost + tp_reagent_cost + vendor_reagent_cost;
-    let mut crafted = HashMap::new();
-    crafted.insert(plus_14_item_id + 1, 4);
-    crafted.insert(plus_16_item_id, 2);
-    let mut leftovers: HashMap<u32, (u32, Money, crafting::Source)> = HashMap::new();
-    leftovers.insert(
-        thermocatalytic_reagent_item_id,
-        (6, Money::from_copper(1496) / 10, crafting::Source::Vendor),
-    );
+    // One reagent is bought from the TP; the vendor's 149.6 beats the next listing at 178, so the
+    // other 5 come from a pack of 10
+    let vendor_reagent = Money::from_copper(1496) / 10;
+    let crafting_cost =
+        Money::from_copper(800000 + 2 * 1000000 + 5 * 1100000 + 120) + vendor_reagent * 5;
     assert_eq!(
         profitable_item,
         Some(ProfitableItem {
-            id: plus_16_item_id,
+            id: item_id,
             crafting_cost,
             count: 2,
             profit: Money::from_copper(7982220 + 7982200).trading_post_sale_revenue()
                 - crafting_cost,
             max_sell: Money::from_copper(7982220),
             min_sell: Money::from_copper(7982200),
-            // (4 * 1100000 + 3 * 1496 / 10) / (85 / 100)
-            breakeven: (Money::from_copper(1100000 * 4) + (Money::from_copper(1496) / 10) * 3)
+            // the second +16: four +14s and three vendor reagents
+            breakeven: (Money::from_copper(1100000 * 4) + vendor_reagent * 3)
                 .trading_post_listing_price(),
             crafting_steps: 6,
             crafting_seconds: 2,
             // 2 TP buys, 3 ingredients, output, 2 sales
             market_seconds: 10 + 18 + 3 + 10,
-            crafted_items: CraftedItems { crafted, leftovers },
+            crafted_items: CraftedItems {
+                crafted: HashMap::from([(plus_14_id + 1, 4), (item_id, 2)]),
+                leftovers: HashMap::from([(reagent_id, (5, vendor_reagent, Vendor))]),
+            },
         })
     );
 }
@@ -785,6 +733,19 @@ fn silk_insignia_patches(patch_price: u32) -> u32 {
 }
 
 #[test]
+fn calculate_crafting_profit_buys_cheap_listings_and_crafts_the_rest() {
+    let items_map = mock_items(&[(1, "Parent", 0), (2, "Part", 0), (3, "Material", 0)]);
+    let recipes_map = mock_recipes(&[(1, 1, &[(2, 10)]), (2, 1, &[(3, 1)])]);
+    // A part costs 50 to craft; only 4 are listed below that
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(30, 4), (100, 1000)]),
+        (3, vec![], vec![(50, 1000)]),
+    ]);
+    let crafted = crafted_ingredients(1, 1, 2, &items_map, &recipes_map, &tp_listings_map);
+    assert_eq!(crafted, 6);
+}
+
+#[test]
 fn calculate_crafting_profit_buys_sub_ingredient_at_or_below_crafting_cost() {
     assert_eq!(campfire_treat_bowls(32), 0);
     assert_eq!(campfire_treat_bowls(31), 0);
@@ -820,23 +781,6 @@ mod data {
                 Item::mock(id, format!("+{} Agony Infusion", bonus).as_str(), 330),
             );
         }
-        /*
-        items_map.insert(49425, Item::mock(49425, "+2 Agony Infusion", 330));
-        items_map.insert(49426, Item::mock(49426, "+3 Agony Infusion", 330));
-        items_map.insert(49427, Item::mock(49427, "+4 Agony Infusion", 330));
-        items_map.insert(49428, Item::mock(49428, "+5 Agony Infusion", 330));
-        items_map.insert(49429, Item::mock(49429, "+6 Agony Infusion", 330));
-        items_map.insert(49430, Item::mock(49430, "+7 Agony Infusion", 330));
-        items_map.insert(49431, Item::mock(49431, "+8 Agony Infusion", 330));
-        items_map.insert(49432, Item::mock(49432, "+9 Agony Infusion", 330));
-        items_map.insert(49433, Item::mock(49433, "+10 Agony Infusion", 330));
-        items_map.insert(49434, Item::mock(49434, "+11 Agony Infusion", 330));
-        items_map.insert(49435, Item::mock(49435, "+12 Agony Infusion", 330));
-        items_map.insert(49436, Item::mock(49436, "+13 Agony Infusion", 330));
-        items_map.insert(49437, Item::mock(49437, "+14 Agony Infusion", 330));
-        items_map.insert(49438, Item::mock(49438, "+15 Agony Infusion", 330));
-        items_map.insert(49439, Item::mock(49439, "+16 Agony Infusion", 330));
-            */
 
         let mut recipes_map = HashMap::new();
         for (id, recipe_id) in (49425..=49439).zip(7851..=7865) {
@@ -862,551 +806,94 @@ mod data {
             );
         }
 
-        let mut tp_listings_map = HashMap::new();
-        tp_listings_map.insert(
-            46747,
-            ItemListings {
-                id: 46747,
-                buys: [
-                    Listing {
-                        listings: 245,
-                        unit_price: 147,
-                        quantity: 59999,
-                    },
-                    Listing {
-                        listings: 211,
-                        unit_price: 148,
-                        quantity: 50790,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 141,
-                        unit_price: 179,
-                        quantity: 33570,
-                    },
-                    Listing {
-                        listings: 63,
-                        unit_price: 178,
-                        quantity: 15136,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49424,
-            ItemListings {
-                id: 49424,
-                buys: [
-                    Listing {
-                        listings: 36,
-                        unit_price: 73,
-                        quantity: 8874,
-                    },
-                    Listing {
-                        listings: 287,
-                        unit_price: 74,
-                        quantity: 71424,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 3,
-                        unit_price: 81,
-                        quantity: 553,
-                    },
-                    Listing {
-                        listings: 2,
-                        unit_price: 80,
-                        quantity: 112,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49425,
-            ItemListings {
-                id: 49425,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 304,
-                        quantity: 194,
-                    },
-                    Listing {
-                        listings: 4,
-                        unit_price: 305,
-                        quantity: 1000,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 452,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 6,
-                        unit_price: 451,
-                        quantity: 1152,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49426,
-            ItemListings {
-                id: 49426,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 749,
-                        quantity: 213,
-                    },
-                    Listing {
-                        listings: 2,
-                        unit_price: 751,
-                        quantity: 355,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 3,
-                        unit_price: 775,
-                        quantity: 8,
-                    },
-                    Listing {
-                        listings: 2,
-                        unit_price: 774,
-                        quantity: 5,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49427,
-            ItemListings {
-                id: 49427,
-                buys: [
-                    Listing {
-                        listings: 2,
-                        unit_price: 1937,
-                        quantity: 319,
-                    },
-                    Listing {
-                        listings: 7,
-                        unit_price: 1950,
-                        quantity: 1193,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 5,
-                        unit_price: 2290,
-                        quantity: 16,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 2100,
-                        quantity: 12,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49428,
-            ItemListings {
-                id: 49428,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 3387,
-                        quantity: 242,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 3500,
-                        quantity: 10,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 2,
-                        unit_price: 4495,
-                        quantity: 6,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 4494,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49429,
-            ItemListings {
-                id: 49429,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 6500,
-                        quantity: 16,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 6600,
-                        quantity: 3,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 7082,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 2,
-                        unit_price: 6333,
-                        quantity: 2,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49430,
-            ItemListings {
-                id: 49430,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 14469,
-                        quantity: 8,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 14475,
-                        quantity: 27,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 17000,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 16996,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49431,
-            ItemListings {
-                id: 49431,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 30700,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 30707,
-                        quantity: 3,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 2,
-                        unit_price: 35900,
-                        quantity: 11,
-                    },
-                    Listing {
-                        listings: 2,
-                        unit_price: 35897,
-                        quantity: 4,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49432,
-            ItemListings {
-                id: 49432,
-                buys: [
-                    Listing {
-                        listings: 2,
-                        unit_price: 58033,
-                        quantity: 87,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 58034,
-                        quantity: 45,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 69000,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 68999,
-                        quantity: 5,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49433,
-            ItemListings {
-                id: 49433,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 115306,
-                        quantity: 3,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 115307,
-                        quantity: 2,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 141500,
-                        quantity: 3,
-                    },
-                    Listing {
-                        listings: 2,
-                        unit_price: 141300,
-                        quantity: 2,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49434,
-            ItemListings {
-                id: 49434,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 235902,
-                        quantity: 2,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 235903,
-                        quantity: 3,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 298392,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 298390,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49435,
-            ItemListings {
-                id: 49435,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 454981,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 454982,
-                        quantity: 2,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 585500,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 585499,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49436,
-            ItemListings {
-                id: 49436,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 944117,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 944118,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 1239994,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 1239990,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49437,
-            ItemListings {
-                id: 49437,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 1900958,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 1900960,
-                        quantity: 4,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 2489189,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 2489188,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49438,
-            ItemListings {
-                id: 49438,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 3509999,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 3510000,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 4749997,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 4499999,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
-        tp_listings_map.insert(
-            49439,
-            ItemListings {
-                id: 49439,
-                buys: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 7982200,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 7982220,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-                sells: [
-                    Listing {
-                        listings: 1,
-                        unit_price: 9499998,
-                        quantity: 1,
-                    },
-                    Listing {
-                        listings: 1,
-                        unit_price: 9499997,
-                        quantity: 1,
-                    },
-                ]
-                .into(),
-            },
-        );
+        // Item id, buy orders and sell listings, each as (unit price, quantity)
+        let tp_listings_map = tp_listings_map(vec![
+            (
+                46747, // Thermocatalytic Reagent
+                vec![(147, 59999), (148, 50790)],
+                vec![(179, 33570), (178, 15136)],
+            ),
+            (
+                49424, // +1 Agony Infusion
+                vec![(73, 8874), (74, 71424)],
+                vec![(81, 553), (80, 112)],
+            ),
+            (
+                49425, // +2 Agony Infusion
+                vec![(304, 194), (305, 1000)],
+                vec![(452, 1), (451, 1152)],
+            ),
+            (
+                49426, // +3 Agony Infusion
+                vec![(749, 213), (751, 355)],
+                vec![(775, 8), (774, 5)],
+            ),
+            (
+                49427, // +4 Agony Infusion
+                vec![(1937, 319), (1950, 1193)],
+                vec![(2290, 16), (2100, 12)],
+            ),
+            (
+                49428, // +5 Agony Infusion
+                vec![(3387, 242), (3500, 10)],
+                vec![(4495, 6), (4494, 1)],
+            ),
+            (
+                49429, // +6 Agony Infusion
+                vec![(6500, 16), (6600, 3)],
+                vec![(7082, 1), (6333, 2)],
+            ),
+            (
+                49430, // +7 Agony Infusion
+                vec![(14469, 8), (14475, 27)],
+                vec![(17000, 1), (16996, 1)],
+            ),
+            (
+                49431, // +8 Agony Infusion
+                vec![(30700, 1), (30707, 3)],
+                vec![(35900, 11), (35897, 4)],
+            ),
+            (
+                49432, // +9 Agony Infusion
+                vec![(58033, 87), (58034, 45)],
+                vec![(69000, 1), (68999, 5)],
+            ),
+            (
+                49433, // +10 Agony Infusion
+                vec![(115306, 3), (115307, 2)],
+                vec![(141500, 3), (141300, 2)],
+            ),
+            (
+                49434, // +11 Agony Infusion
+                vec![(235902, 2), (235903, 3)],
+                vec![(298392, 1), (298390, 1)],
+            ),
+            (
+                49435, // +12 Agony Infusion
+                vec![(454981, 1), (454982, 2)],
+                vec![(585500, 1), (585499, 1)],
+            ),
+            (
+                49436, // +13 Agony Infusion
+                vec![(944117, 1), (944118, 1)],
+                vec![(1239994, 1), (1239990, 1)],
+            ),
+            (
+                49437, // +14 Agony Infusion
+                vec![(1900958, 1), (1900960, 4)],
+                vec![(2489189, 1), (2489188, 1)],
+            ),
+            (
+                49438, // +15 Agony Infusion
+                vec![(3509999, 1), (3510000, 1)],
+                vec![(4749997, 1), (4499999, 1)],
+            ),
+            (
+                49439, // +16 Agony Infusion
+                vec![(7982200, 1), (7982220, 1)],
+                vec![(9499998, 1), (9499997, 1)],
+            ),
+        ]);
 
         TestData {
             item_id,

@@ -134,6 +134,18 @@ impl ItemListings {
         Some((revenue, min_buy))
     }
 
+    /// Quantity left at the lowest sell price, after pending buys
+    pub fn lowest_price_quantity(&self) -> Option<u32> {
+        let mut pending_buy_quantity = self.pending_buy_quantity;
+        for listing in self.sells.iter().rev() {
+            if listing.quantity > pending_buy_quantity {
+                return Some(listing.quantity - pending_buy_quantity);
+            }
+            pending_buy_quantity -= listing.quantity;
+        }
+        None
+    }
+
     pub fn lowest_sell_offer(&self, mut quantity: u32) -> Option<u32> {
         debug_assert!(!quantity.is_zero());
 
