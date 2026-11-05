@@ -112,6 +112,7 @@ pub fn profitable_item_list(
                 None,
                 &CONFIG.crafting,
             )
+            .ok()
         })
         .collect();
     let mut profitable_items: Vec<_> = profitable_items
@@ -139,7 +140,7 @@ pub async fn calc_item_profit(
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<
     (
-        Option<(ProfitableItem, crafting::RequiredUnlocks)>,
+        Result<(ProfitableItem, crafting::RequiredUnlocks), String>,
         HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
         HashMap<u32, api::ItemListings>,
     ),
@@ -171,7 +172,7 @@ pub async fn calc_item_profit(
     );
 
     let profitable_item = match profitable_item {
-        Some(item)
+        Ok(item)
             if !item
                 .crafted_items
                 .unknown_recipes(recipes_map, unlocks.known_recipes)
@@ -182,9 +183,10 @@ pub async fn calc_item_profit(
                 request::request_paginated("commerce/prices", &None, None).await?;
             let tp_prices_map = vec_to_map(tp_prices, |x| x.id);
             charge_unlocks(item, unlocks, recipes_map, items_map, &tp_prices_map)
+                .ok_or_else(|| "Not profitable after buying its recipes, or can't learn one".into())
         }
-        Some(item) => Some((item, Default::default())),
-        None => None,
+        Ok(item) => Ok((item, Default::default())),
+        Err(stop) => Err(stop),
     };
 
     Ok((profitable_item, purchased_ingredients, tp_listings_map))
@@ -236,7 +238,7 @@ pub fn calculate_crafting_profit(
         &mut HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
     >,
     opt: &config::CraftingOptions,
-) -> Option<ProfitableItem> {
+) -> Result<ProfitableItem, String> {
     let api_listings_map = tp_listings_map;
     let buy_order_quantities: Vec<u32> = tp_listings_map.get(&item_id).map_or_else(Vec::new, |l| {
         l.buys.iter().map(|listing| listing.quantity).collect()
@@ -267,11 +269,17 @@ pub fn calculate_crafting_profit(
         |listings| listings.buys.last().map_or(0, |l| l.unit_price),
     );
     let mut breakeven = Money::zero();
+    // why the loop stopped
+    let stop: String;
 
     // simulate crafting 1 item per loop iteration until it becomes unprofitable
     loop {
         if let Some(count) = opt.count {
             if crafting_count + output_item_count > count {
+                stop = format!(
+                    "--count {} is less than one batch ({})",
+                    count, output_item_count
+                );
                 break;
             }
         }
@@ -281,10 +289,7 @@ pub fn calculate_crafting_profit(
             items: crafted_items.clone(),
         };
 
-        let crafting_cost = if let Some(crafting::PreciseCraftingCost {
-            source: crafting::Source::Crafting,
-            cost,
-        }) = crafting::calculate_precise_min_crafting_cost(
+        let crafting_cost = match crafting::calculate_precise_min_crafting_cost(
             item_id,
             output_item_count,
             recipes_map,
@@ -293,9 +298,32 @@ pub fn calculate_crafting_profit(
             &mut context,
             opt,
         ) {
-            cost
-        } else {
-            break;
+            Some(crafting::PreciseCraftingCost {
+                source: crafting::Source::Crafting,
+                cost,
+                ..
+            }) => cost,
+            Some(crafting::PreciseCraftingCost {
+                cost,
+                source,
+                crafting: Some(crafting),
+            }) => {
+                stop = format!(
+                    "Cheaper to buy {} ({} each) than to craft ({} each)",
+                    if source == crafting::Source::Vendor {
+                        "from a vendor"
+                    } else {
+                        "on the TP"
+                    },
+                    cost / output_item_count,
+                    crafting / output_item_count
+                );
+                break;
+            }
+            _ => {
+                stop = "An ingredient can't be bought or crafted".to_string();
+                break;
+            }
         };
 
         let (buy_price, min_buy) = if let Some(price) = opt.value {
@@ -307,11 +335,22 @@ pub fn calculate_crafting_profit(
         {
             (buy_price, min_buy)
         } else {
+            stop = "Not enough buy orders".to_string();
             break;
         };
 
         // Ensure buy_price is larger before subtracting cost for profit
         if buy_price < crafting_cost + min_profit {
+            stop = format!(
+                "Crafting costs {} each, {} ({} each)",
+                crafting_cost / output_item_count,
+                if buy_price < crafting_cost {
+                    "more than it sells for"
+                } else {
+                    "too close to its sale price for --min-per-item"
+                },
+                buy_price / output_item_count
+            );
             break;
         }
 
@@ -396,7 +435,11 @@ pub fn calculate_crafting_profit(
     // Stop at the most profitable count, after selling leftovers and, with --min-per-hour, the
     // time spent
     if best_count == 0 {
-        return None;
+        return Err(if crafting_count == 0 {
+            stop
+        } else {
+            "Not profitable after charging leftovers or --min-per-hour".to_string()
+        });
     }
     if best_count < crafting_count {
         if let Some(purchased_ingredients) = &mut purchased_ingredients {
@@ -418,7 +461,7 @@ pub fn calculate_crafting_profit(
 
     let (leftover_cost, leftover_revenue) =
         value_leftovers(&crafted_items.leftovers, &tp_listings_map);
-    Some(ProfitableItem {
+    Ok(ProfitableItem {
         id: item_id,
         crafting_cost: total_crafting_cost + leftover_cost,
         profit: listing_profit + leftover_revenue - leftover_cost,

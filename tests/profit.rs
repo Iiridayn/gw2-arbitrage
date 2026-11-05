@@ -100,7 +100,7 @@ fn calculate_crafting_profit_agony_infusion_unprofitable_test() {
         None,
         &Default::default(),
     );
-    assert!(profitable_item.is_none());
+    assert!(profitable_item.is_err());
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
     let leftover_revenue = Money::from_copper(148).trading_post_sale_revenue() * 5;
     assert_eq!(
         profitable_item,
-        Some(ProfitableItem {
+        Ok(ProfitableItem {
             id: item_id,
             crafting_cost,
             count: 2,
@@ -242,7 +242,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         None,
         &Default::default(),
     );
-    assert!(profitable_item.is_none());
+    assert!(profitable_item.is_err());
 
     recipes_map.get_mut(&item_id).unwrap().output_item_count = 98;
     let profitable_item = calculate_crafting_profit(
@@ -258,7 +258,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
     crafted.insert(item_id, 98);
     assert_eq!(
         profitable_item,
-        Some(ProfitableItem {
+        Ok(ProfitableItem {
             id: item_id,
             crafting_cost,
             count: 98,
@@ -300,7 +300,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
     crafted.insert(item_id, 96);
     assert_eq!(
         profitable_item,
-        Some(ProfitableItem {
+        Ok(ProfitableItem {
             id: item_id,
             crafting_cost,
             count: 96,
@@ -467,7 +467,7 @@ fn calculate_crafting_profit_unknown_recipe_test() {
         &Default::default(),
     );
 
-    assert!(profitable_item.is_some());
+    assert!(profitable_item.is_ok());
     assert_eq!(
         purchased_ingredients
             .into_iter()
@@ -564,7 +564,7 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
     crafted.insert(2100, 40);
     assert_eq!(
         profitable_item,
-        Some(ProfitableItem {
+        Ok(ProfitableItem {
             id: 1000,
             crafting_cost,
             count: 51,
@@ -592,7 +592,7 @@ fn one_ingredient_profit(
     let (items_map, recipes_map) = one_ingredient_maps(1000, 1001, 0);
     let tp_listings_map =
         tp_listings_map(vec![(1001, vec![], ingredient_sells), (1000, buys, vec![])]);
-    calculate_crafting_profit(1000, &recipes_map, &items_map, &tp_listings_map, None, opt)
+    calculate_crafting_profit(1000, &recipes_map, &items_map, &tp_listings_map, None, opt).ok()
 }
 
 #[test]

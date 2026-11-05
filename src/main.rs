@@ -246,27 +246,28 @@ fn find_item_by_name(
 /// Print detailed information about a profitable item
 fn print_profitable_item(
     item_id: u32,
-    profitable_item: &Option<(profit::ProfitableItem, crafting::RequiredUnlocks)>,
+    profitable_item: &Result<(profit::ProfitableItem, crafting::RequiredUnlocks), String>,
     purchased_ingredients: &HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     recipes_map: &HashMap<u32, Recipe>,
     items_map: &HashMap<u32, Item>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (profitable_item, required_unlocks) = if let Some(item) = profitable_item {
-        item
-    } else {
-        if !recipes_map.contains_key(&item_id) {
-            println!("No usable recipe; check -m, -u and the blacklists");
-        } else if CONFIG.crafting.value.is_none()
-            && tp_listings_map
-                .get(&item_id)
-                .is_none_or(|listings| listings.buys.is_empty())
-        {
-            println!("No buy orders on the trading post; pass --value to price it");
-        } else {
-            println!("Item is not profitable to craft");
+    let (profitable_item, required_unlocks) = match profitable_item {
+        Ok(item) => item,
+        Err(stop) => {
+            if !recipes_map.contains_key(&item_id) {
+                println!("No usable recipe; check -m, -u and the blacklists");
+            } else if CONFIG.crafting.value.is_none()
+                && tp_listings_map
+                    .get(&item_id)
+                    .is_none_or(|listings| listings.buys.is_empty())
+            {
+                println!("No buy orders on the trading post; pass --value to price it");
+            } else {
+                println!("{}", stop);
+            }
+            return Ok(());
         }
-        return Ok(());
     };
 
     println!("============");

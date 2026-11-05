@@ -204,6 +204,8 @@ pub fn calculate_estimated_min_crafting_cost(
 pub struct PreciseCraftingCost {
     pub cost: Money,
     pub source: Source,
+    // the cost of crafting it, if possible, whichever source is cheapest
+    pub crafting: Option<Money>,
 }
 
 pub struct PreciseCraftingCostContext {
@@ -427,6 +429,7 @@ pub fn calculate_precise_min_crafting_cost(
     let mut total = PreciseCraftingCost {
         cost: Money::zero(),
         source: Source::Crafting,
+        crafting: Some(Money::zero()),
     };
     let mut remaining = item_count;
     while remaining > 0 {
@@ -444,6 +447,7 @@ pub fn calculate_precise_min_crafting_cost(
             opt,
         )?;
         total.cost += chunk.cost;
+        total.crafting = total.crafting.zip(chunk.crafting).map(|(a, b)| a + b);
         if chunk.source != Source::Crafting {
             total.source = chunk.source;
         }
@@ -482,6 +486,7 @@ fn price_from_one_source(
                     return Some(PreciseCraftingCost {
                         cost: cost * item_count,
                         source,
+                        crafting: None,
                     })
                 }
                 std::cmp::Ordering::Greater => {
@@ -492,6 +497,7 @@ fn price_from_one_source(
                     return Some(PreciseCraftingCost {
                         cost: cost * item_count,
                         source,
+                        crafting: None,
                     });
                 }
             }
@@ -616,6 +622,7 @@ fn price_from_one_source(
     Some(PreciseCraftingCost {
         cost: cost + cost_of_leftovers_used,
         source,
+        crafting: crafting_cost,
     })
 }
 
