@@ -178,7 +178,7 @@ pub enum ItemConsumableType {
 }
 
 impl Item {
-    // Output is cost per item, min purchase count
+    // Output is cost of a lot, items in a lot
     pub fn vendor_cost(&self) -> Option<(Money, u32)> {
         // standard vendor sell price is generally buy price * 8, see:
         // https://forum-en.gw2archive.eu/forum/community/api/How-to-get-the-vendor-sell-price
@@ -214,14 +214,13 @@ impl Item {
             12156 | // Jug of Water
             12324 | // Bag of Starch
             12271   // Bottle of Soy Sauce
-                // Price is already scaled per item
-                => Some((Money::from_copper((self.vendor_value * 8) as i32), 10)),
+                => Some((Money::from_copper((self.vendor_value * 8 * 10) as i32), 10)),
 
             // Custom Price
 
-            46747 => Some((Money::from_copper(1496) / 10, 10)), // Thermocatalytic Reagent
-            91739 => Some((Money::from_copper(1496) / 10, 10)), // Pile of Compost Starter
-            91702 => Some((Money::from_copper(1000) / 5, 5)), // Pile of Powdered Gelatin Mix; prereq achievement
+            46747 => Some((Money::from_copper(1496), 10)), // Thermocatalytic Reagent
+            91739 => Some((Money::from_copper(1496), 10)), // Pile of Compost Starter
+            91702 => Some((Money::from_copper(1000), 5)), // Pile of Powdered Gelatin Mix; prereq achievement
             90201 => Some((Money::from_copper(40000), 1)), // Smell-Enhancing Culture; prereq achievement
 
             // Karma Ingredients - Bulk package item ids
@@ -244,9 +243,16 @@ impl Item {
         }
     }
 
-    // Account Bound Tokens
-    pub fn token_value(&self) -> Option<Money> {
-        match &self.id {
+    // Account Bound Tokens; output is value of a lot, items in a lot
+    pub fn token_value(&self) -> Option<(Money, u32)> {
+        // 92272 Eternal Ice Shard
+        if self.id == 92272 {
+            // Can convert 75 into 10 tokens worth 20 VM each for 2688 karma
+            let value =
+                Money::from_currency(VolatileMagic, 200)? - Money::from_currency(Karma, 2688)?;
+            return (value.to_copper_value() >= 0).then_some((value, 75));
+        }
+        let value = match &self.id {
             // Base game
             // Empyreal Fragment, Dragonite Ore, Pile of Bloodstone Dust
             46735 | 46733 | 46731 if CONFIG.ascended.is_some() => {
@@ -276,21 +282,10 @@ impl Item {
             // Icebrood Saga
             // 92072 Hatched Chili
             92072 => Some(Money::from_copper(0)),
-            // 92272 Eternal Ice Shard
-            92272 => {
-                // Can convert 75 into 10 tokens worth 20 VM each for 2688 karma
-                let value = (Money::from_currency(VolatileMagic, 200)?
-                    - Money::from_currency(Karma, 2688)?)
-                    / 75;
-                if value.to_copper_value() >= 0 {
-                    Some(value)
-                } else {
-                    None
-                }
-            }
 
             _ => None,
-        }
+        };
+        value.map(|value| (value, 1))
     }
 
     pub fn is_restricted(&self) -> bool {

@@ -1,9 +1,8 @@
-use num_rational::{Rational32, Rational64};
-use num_traits::{Signed, ToPrimitive, Zero};
+use num_rational::Rational32;
+use num_traits::{ToPrimitive, Zero};
 
 use std::array;
 use std::cmp;
-use std::convert::TryFrom;
 use std::fmt;
 
 use crate::config::CONFIG;
@@ -65,16 +64,21 @@ impl Currency {
 
 const COIN_ID: u32 = 1;
 
+/// Rounds up, so the first of several shares is the largest
+fn div_ceil(n: i64, d: i64) -> i64 {
+    -(-n).div_euclid(d)
+}
+
 #[derive(Copy, Clone, Eq)]
 pub struct Money {
-    copper: Rational32,
+    copper: i32,
     // indexed by `Currency as usize`
-    currencies: [Rational32; Currency::ALL.len()],
+    currencies: [i32; Currency::ALL.len()],
 }
 impl Money {
     pub fn from_copper(copper: i32) -> Self {
         Self {
-            copper: Rational32::from(copper),
+            copper,
             ..Default::default()
         }
     }
@@ -82,8 +86,18 @@ impl Money {
     pub fn from_currency(currency: Currency, count: u32) -> Option<Self> {
         CONFIG.rates[currency as usize]?;
         let mut money = Self::zero();
-        money.currencies[currency as usize] = Rational32::from(count as i32);
+        money.currencies[currency as usize] = count as i32;
         Some(money)
+    }
+    /// Splits this between `count` of `total` items and the rest; the share is rounded up, and the
+    /// two always add up to this
+    pub fn split(self, count: u32, total: u32) -> (Self, Self) {
+        let share = |amount: i32| div_ceil(amount as i64 * count as i64, total as i64) as i32;
+        let share = Self {
+            copper: share(self.copper),
+            currencies: self.currencies.map(share),
+        };
+        (share, self - share)
     }
     /// None if the currency has no copper value: untracked, or its rate isn't configured.
     pub fn from_api_currency(currency_id: u32, count: u32) -> Option<Self> {
@@ -101,21 +115,22 @@ impl Money {
         Currency::ALL
             .iter()
             .copied()
-            .fold(self.copper, |value, currency| {
+            .fold(Rational32::from(self.copper), |value, currency| {
                 let rate = CONFIG.rates[currency as usize].unwrap_or(Rational32::zero());
-                value + self.currencies[currency as usize] * rate
+                value + rate * self.currencies[currency as usize]
             })
     }
     pub fn to_copper_value(&self) -> i32 {
         self.copper_value().ceil().to_integer()
     }
 
-    fn fee(&self, percent: u8) -> Rational32 {
+    fn fee(&self, percent: u8) -> i32 {
         cmp::max(
             Rational32::from(1),
-            self.copper * Rational32::new(percent as i32, 100),
+            Rational32::new(percent as i32, 100) * self.copper,
         )
         .round()
+        .to_integer()
     }
 
     pub fn trading_post_sale_revenue(self) -> Money {
@@ -124,7 +139,7 @@ impl Money {
             copper: if self.copper > fees {
                 self.copper - fees
             } else {
-                0.into()
+                0
             },
             ..Default::default()
         }
@@ -141,7 +156,9 @@ impl Money {
                     ))
                 .ceil(),
                 copper + 2,
-            ),
+            )
+            .ceil()
+            .to_integer(),
             ..Default::default()
         }
     }
@@ -164,7 +181,7 @@ impl Money {
     }
 
     fn format_copper(&self) -> String {
-        let copper = self.copper.to_integer();
+        let copper = self.copper;
         let sign = if copper < 0 { "-" } else { "" };
         let copper = copper.abs();
 
@@ -182,11 +199,8 @@ impl Money {
             if count.is_zero() {
                 return None;
             }
-            let sign = if count < Rational32::zero() { "-" } else { "" };
-            Some((
-                currency,
-                format!("{}{}", sign, count.abs().ceil().to_integer()),
-            ))
+            let sign = if count < 0 { "-" } else { "" };
+            Some((currency, format!("{}{}", sign, count.abs())))
         })
     }
 
@@ -223,8 +237,8 @@ impl Default for Money {
 impl Zero for Money {
     fn zero() -> Self {
         Self {
-            copper: Rational32::zero(),
-            currencies: [Rational32::zero(); Currency::ALL.len()],
+            copper: 0,
+            currencies: [0; Currency::ALL.len()],
         }
     }
     fn is_zero(&self) -> bool {
@@ -266,14 +280,12 @@ impl std::ops::Mul<u32> for Money {
         }
     }
 }
+/// Rounds up
 impl std::ops::Div<u32> for Money {
     type Output = Self;
 
     fn div(self, other: u32) -> Self {
-        Self {
-            copper: self.copper / other as i32,
-            currencies: self.currencies.map(|count| count / other as i32),
-        }
+        self.split(1, other).0
     }
 }
 impl PartialEq for Money {
@@ -295,30 +307,7 @@ impl Ord for Money {
 }
 impl std::iter::Sum for Money {
     fn sum<I: Iterator<Item = Money>>(iter: I) -> Self {
-        let mut sink = Money::zero();
-        let mut copper = Rational64::zero();
-        for src in iter {
-            copper += Rational64::new(
-                i64::from(*src.copper.numer()),
-                i64::from(*src.copper.denom()),
-            );
-            sink.currencies = array::from_fn(|i| sink.currencies[i] + src.currencies[i]);
-        }
-        let mut error = false;
-        sink.copper = Rational32::new(
-            i32::try_from(*copper.numer()).unwrap_or_else(|_| {
-                error = true;
-                i32::MAX
-            }),
-            i32::try_from(*copper.denom()).unwrap_or_else(|_| {
-                error = true;
-                i32::MAX
-            }),
-        );
-        if error {
-            eprintln!("Overflow error: Money sum will be approximate");
-        }
-        sink
+        iter.fold(Money::zero(), |sum, money| sum + money)
     }
 }
 
@@ -326,7 +315,7 @@ impl fmt::Debug for Money {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut result = f.debug_struct("Money");
 
-        if self.copper != Rational32::zero() {
+        if self.copper != 0 {
             result.field("copper", &self.format_copper());
         }
         for (currency, units) in self.currency_units() {

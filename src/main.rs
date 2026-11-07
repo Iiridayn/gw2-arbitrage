@@ -114,18 +114,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             true
         })
         .collect();
-    let mut recipes_map = profit::vec_to_map(recipes, |x| x.output_item_id);
-    let items_map = profit::vec_to_map(items, |x| x.id);
+    let game_data = crafting::GameData {
+        recipes: profit::vec_to_map(recipes, |x| x.output_item_id),
+        items: profit::vec_to_map(items, |x| x.id),
+    };
 
-    let recursive_recipes = recipe::mark_recursive_recipes(&recipes_map);
-    for recipe_id in recursive_recipes.into_iter() {
-        recipes_map.remove(&recipe_id);
-    }
-
-    let unlocks = crafting::RecipeUnlocks::new(&items_map, &known_recipes);
+    let unlocks = crafting::RecipeUnlocks::new(&game_data.items, &known_recipes);
 
     let item_id = match &CONFIG.name {
-        Some(query) => match find_item_by_name(query, &recipes_map, &items_map) {
+        Some(query) => match find_item_by_name(query, &game_data) {
             Some(item_id) => Some(item_id),
             None => return Ok(()),
         },
@@ -134,14 +131,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(item_id) = item_id {
         let (profitable_item, purchased_ingredients, tp_listings_map) =
-            profit::calc_item_profit(item_id, &recipes_map, &items_map, &unlocks, notify).await?;
+            profit::calc_item_profit(item_id, &game_data, &unlocks, notify).await?;
         print_profitable_item(
             item_id,
             &profitable_item,
             &purchased_ingredients,
             &tp_listings_map,
-            &recipes_map,
-            &items_map,
+            &game_data,
         )?;
     } else {
         println!("Loading trading post prices");
@@ -164,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tp_prices_map = profit::vec_to_map(tp_prices, |x| x.id);
 
         let (profitable_item_ids, ingredient_ids) =
-            profit::find_profitable_items(&tp_prices_map, &recipes_map, &items_map);
+            profit::find_profitable_items(&tp_prices_map, &game_data);
 
         println!("Loading detailed trading post listings");
         let mut request_listing_item_ids = vec![];
@@ -185,13 +181,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &tp_listings_map,
             &profitable_item_ids,
             &request_listing_item_ids,
-            &recipes_map,
-            &items_map,
+            &game_data,
             &tp_prices_map,
             &unlocks,
         );
 
-        print_item_list(&profitable_items, &recipes_map, &items_map)?;
+        print_item_list(&profitable_items, &game_data)?;
     }
 
     Ok(())
@@ -199,16 +194,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Find the craftable item with a word starting with each query word, in any order. An exact name
 /// wins over longer ones; prints the candidates or why there are none, if not exactly one.
-fn find_item_by_name(
-    query: &str,
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
-) -> Option<u32> {
+fn find_item_by_name(query: &str, game_data: &crafting::GameData) -> Option<u32> {
     let query = query.to_lowercase();
     let words: Vec<&str> = query.split_whitespace().collect();
-    let mut matches: Vec<(&Item, String)> = recipes_map
+    let mut matches: Vec<(&Item, String)> = game_data
+        .recipes
         .keys()
-        .filter_map(|id| items_map.get(id))
+        .filter_map(|id| game_data.items.get(id))
         .map(|item| (item, item.name.to_lowercase()))
         .filter(|(_, name)| {
             words
@@ -249,13 +241,12 @@ fn print_profitable_item(
     profitable_item: &Result<(profit::ProfitableItem, crafting::RequiredUnlocks), String>,
     purchased_ingredients: &HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
     tp_listings_map: &HashMap<u32, api::ItemListings>,
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
+    game_data: &crafting::GameData,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (profitable_item, required_unlocks) = match profitable_item {
         Ok(item) => item,
         Err(stop) => {
-            if !recipes_map.contains_key(&item_id) {
+            if !game_data.recipes.contains_key(&item_id) {
                 println!("No usable recipe; check -m, -u and the blacklists");
             } else if CONFIG.crafting.value.is_none()
                 && tp_listings_map
@@ -274,7 +265,8 @@ fn print_profitable_item(
     println!(
         "Shopping list for {} x {} = {} profit ({}, {} / hour, {}%)",
         profitable_item.count,
-        items_map
+        game_data
+            .items
             .get(&item_id)
             .map_or_else(|| "???".to_string(), |item| item.to_string()),
         Money::from_copper(profitable_item.profit.to_copper_value()),
@@ -327,7 +319,8 @@ fn print_profitable_item(
     let mut inventory = 0;
     for ((ingredient_id, ingredient_source), ingredient) in sorted_ingredients {
         let purchase_count = if *ingredient_source == crafting::Source::Vendor {
-            items_map
+            game_data
+                .items
                 .get(ingredient_id)
                 .unwrap_or_else(|| panic!("Missing item for ingredient {}", ingredient_id))
                 .vendor_cost()
@@ -376,7 +369,8 @@ fn print_profitable_item(
                 }
             }
             crafting::Source::Vendor => {
-                let vendor_cost = items_map
+                let vendor_cost = game_data
+                    .items
                     .get(ingredient_id)
                     .unwrap_or_else(|| panic!("Missing item for ingredient {}", ingredient_id))
                     .vendor_cost();
@@ -384,9 +378,9 @@ fn print_profitable_item(
                     if purchase_count > 1 {
                         format!(
                             " (vendor: {} per {}) Subtotal: {}",
-                            cost * purchase_count,
+                            cost,
                             purchase_count,
-                            cost * ingredient.count,
+                            cost * ingredient.count.div_ceil(purchase_count),
                         )
                     } else {
                         format!(" (vendor: {}) Subtotal: {}", cost, cost * ingredient.count,)
@@ -400,7 +394,8 @@ fn print_profitable_item(
         println!(
             "{} {}{}",
             ingredient_count_msg,
-            items_map
+            game_data
+                .items
                 .get(ingredient_id)
                 .map_or_else(|| "???".to_string(), |item| item.to_string()),
             source_msg,
@@ -410,7 +405,7 @@ fn print_profitable_item(
     // Mystic Forge recipes with an ingredient repeated need its stack split, once for all of them
     let mut splits: HashMap<u32, usize> = HashMap::new();
     for id in profitable_item.crafted_items.crafted.keys() {
-        let recipe = &recipes_map[id];
+        let recipe = &game_data.recipes[id];
         if !recipe.disciplines.contains(&Discipline::MysticForge) {
             continue;
         }
@@ -432,7 +427,9 @@ fn print_profitable_item(
         profitable_item.count, item_id
     );
     use Discipline::{DoubleClick, MysticForge, Salvage};
-    let mut sorted = profitable_item.crafted_items.sorted(item_id, recipes_map);
+    let mut sorted = profitable_item
+        .crafted_items
+        .sorted(item_id, &game_data.recipes);
     let step_groups = crafting::discipline_groups(&mut sorted);
     let labels = crafting::disciplines_labels(&sorted, &step_groups);
     let mut current = None;
@@ -461,14 +458,16 @@ fn print_profitable_item(
             ""
         };
         let num_crafted = count / recipe.output_item_count;
-        let item_name = items_map
+        let item_name = game_data
+            .items
             .get(&item_id)
             .map_or_else(|| "???".to_string(), |item| item.to_string());
         let mut ingredients = recipe
             .sorted_ingredients()
             .iter()
             .map(|ingredient| {
-                let ingredient_name = items_map
+                let ingredient_name = game_data
+                    .items
                     .get(&ingredient.item_id)
                     .map_or_else(|| "???".to_string(), |item| item.to_string());
                 format!("{} {}", ingredient.count * num_crafted, ingredient_name)
@@ -496,7 +495,8 @@ fn print_profitable_item(
             .map(|(recipe_id, unlock)| match unlock {
                 Some((unlock_id, cost)) => format!(
                     "{}, {}",
-                    items_map
+                    game_data
+                        .items
                         .get(unlock_id)
                         .map_or_else(|| "???".to_string(), |item| item.to_string()),
                     cost
@@ -524,10 +524,11 @@ fn print_profitable_item(
             println!(
                 "{} {}, breakeven: {} each",
                 count,
-                items_map
+                game_data
+                    .items
                     .get(leftover_id)
                     .map_or_else(|| "???".to_string(), |item| item.to_string()),
-                cost.trading_post_listing_price(),
+                (*cost / *count).trading_post_listing_price(),
             );
         }
     }
@@ -569,8 +570,7 @@ fn format_duration(seconds: f64) -> String {
 /// List profitable items to screen or CSV
 fn print_item_list(
     profitable_items: &[(profit::ProfitableItem, crafting::RequiredUnlocks)],
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
+    game_data: &crafting::GameData,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut csv_writer = if let Some(path) = &CONFIG.output_csv {
         Some(csv::Writer::from_path(path)?)
@@ -630,16 +630,19 @@ fn print_item_list(
         }
 
         let item_id = profitable_item.id;
-        let name = items_map
+        let name = game_data
+            .items
             .get(&item_id)
             .map_or_else(|| "???".to_string(), |item| item.to_string());
 
-        let recipe = recipes_map.get(&item_id).expect("Missing recipe");
+        let recipe = game_data.recipes.get(&item_id).expect("Missing recipe");
 
         let profit_per_hour = profitable_item.profit_per_hour();
 
         // e.g. "MF+Sr 400+J 400"
-        let mut sorted = profitable_item.crafted_items.sorted(item_id, recipes_map);
+        let mut sorted = profitable_item
+            .crafted_items
+            .sorted(item_id, &game_data.recipes);
         let step_groups = crafting::discipline_groups(&mut sorted);
         let mut labels = crafting::disciplines_labels(&sorted, &step_groups);
         use Discipline::MysticForge;

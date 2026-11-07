@@ -1,5 +1,6 @@
 use gw2_arbitrage::{
     api::{self, ItemListings, Listing, RecipeIngredient},
+    crafting::GameData,
     item::Item,
     recipe::{Discipline, Recipe},
 };
@@ -81,11 +82,11 @@ impl MockRecipe for Recipe {
 }
 
 /// Items and recipes for an item made from one of an ingredient
-pub fn one_ingredient_maps(
+pub fn one_ingredient_game_data(
     item_id: u32,
     ingredient_id: u32,
     ingredient_vendor_value: u32,
-) -> (HashMap<u32, Item>, HashMap<u32, Recipe>) {
+) -> GameData {
     let mut items_map = HashMap::new();
     items_map.insert(item_id, Item::mock(item_id, "Main item", 0));
     items_map.insert(
@@ -108,7 +109,10 @@ pub fn one_ingredient_maps(
             true,
         ),
     );
-    (items_map, recipes_map)
+    GameData {
+        recipes: recipes_map,
+        items: items_map,
+    }
 }
 
 /// Item id, buy orders and sell listings, each as (unit price, quantity)

@@ -6,9 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::api;
 use crate::config;
 use crate::crafting;
-use crate::item::Item;
 use crate::money::Money;
-use crate::recipe::Recipe;
 use crate::request;
 use crate::trading_post::{market_seconds, ItemListings};
 use config::CONFIG;
@@ -17,13 +15,12 @@ use config::CONFIG;
 /// scrutiny
 pub fn find_profitable_items(
     tp_prices_map: &HashMap<u32, api::Price>,
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
+    game_data: &crafting::GameData,
 ) -> (Vec<u32>, Vec<u32>) {
     let mut profitable_item_ids = vec![];
     let mut ingredient_ids = vec![];
-    for (item_id, recipe) in recipes_map {
-        if let Some(item) = items_map.get(item_id) {
+    for (item_id, recipe) in &game_data.recipes {
+        if let Some(item) = game_data.items.get(item_id) {
             // we cannot sell restricted items
             if item.is_restricted() {
                 continue;
@@ -58,19 +55,18 @@ pub fn find_profitable_items(
             cost: crafting_cost,
         }) = crafting::calculate_estimated_min_crafting_cost(
             *item_id,
-            recipes_map,
-            items_map,
+            1,
+            game_data,
             tp_prices_map,
             None,
+            &mut vec![],
             &CONFIG.crafting,
         ) {
             let effective_buy_price =
                 Money::from_copper(tp_prices.buys.unit_price as i32).trading_post_sale_revenue();
             if effective_buy_price > crafting_cost {
                 profitable_item_ids.push(*item_id);
-                if let Some(recipe) = recipes_map.get(item_id) {
-                    recipe.collect_ingredient_ids(recipes_map, &mut ingredient_ids);
-                }
+                recipe.collect_ingredient_ids(&game_data.recipes, &mut ingredient_ids);
             }
         }
     }
@@ -83,8 +79,7 @@ pub fn profitable_item_list(
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     profitable_item_ids: &Vec<u32>,
     request_listing_item_ids: &[u32],
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
+    game_data: &crafting::GameData,
     tp_prices_map: &HashMap<u32, api::Price>,
     unlocks: &crafting::RecipeUnlocks,
 ) -> Vec<(ProfitableItem, crafting::RequiredUnlocks)> {
@@ -92,8 +87,8 @@ pub fn profitable_item_list(
         .par_iter()
         .filter_map(|item_id| {
             let mut ingredient_ids = vec![*item_id];
-            if let Some(recipe) = recipes_map.get(item_id) {
-                recipe.collect_ingredient_ids(recipes_map, &mut ingredient_ids);
+            if let Some(recipe) = game_data.recipes.get(item_id) {
+                recipe.collect_ingredient_ids(&game_data.recipes, &mut ingredient_ids);
             }
 
             let mut tp_listings_map_for_item: HashMap<u32, _> = HashMap::new();
@@ -106,8 +101,7 @@ pub fn profitable_item_list(
 
             calculate_crafting_profit(
                 *item_id,
-                recipes_map,
-                items_map,
+                game_data,
                 &tp_listings_map_for_item,
                 None,
                 &CONFIG.crafting,
@@ -117,7 +111,7 @@ pub fn profitable_item_list(
         .collect();
     let mut profitable_items: Vec<_> = profitable_items
         .into_iter()
-        .filter_map(|item| charge_unlocks(item, unlocks, recipes_map, items_map, tp_prices_map))
+        .filter_map(|item| charge_unlocks(item, unlocks, game_data, tp_prices_map))
         .collect();
 
     match CONFIG.sort {
@@ -134,8 +128,7 @@ pub fn profitable_item_list(
 
 pub async fn calc_item_profit(
     item_id: u32,
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
+    game_data: &crafting::GameData,
     unlocks: &crafting::RecipeUnlocks<'_>,
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<
@@ -147,8 +140,8 @@ pub async fn calc_item_profit(
     Box<dyn std::error::Error>,
 > {
     let mut items_to_price = vec![];
-    if let Some(recipe) = recipes_map.get(&item_id) {
-        recipe.collect_ingredient_ids(recipes_map, &mut items_to_price);
+    if let Some(recipe) = game_data.recipes.get(&item_id) {
+        recipe.collect_ingredient_ids(&game_data.recipes, &mut items_to_price);
     }
 
     let mut request_listing_item_ids = vec![item_id];
@@ -164,8 +157,7 @@ pub async fn calc_item_profit(
     let mut purchased_ingredients = Default::default();
     let profitable_item = calculate_crafting_profit(
         item_id,
-        recipes_map,
-        items_map,
+        game_data,
         &tp_listings_map,
         Some(&mut purchased_ingredients),
         &CONFIG.crafting,
@@ -175,14 +167,14 @@ pub async fn calc_item_profit(
         Ok(item)
             if !item
                 .crafted_items
-                .unknown_recipes(recipes_map, unlocks.known_recipes)
+                .unknown_recipes(&game_data.recipes, unlocks.known_recipes)
                 .is_empty() =>
         {
             // Unlock items and their crafting ingredients aren't known before crafting is decided
             let tp_prices: Vec<api::Price> =
                 request::request_paginated("commerce/prices", &None, None).await?;
             let tp_prices_map = vec_to_map(tp_prices, |x| x.id);
-            charge_unlocks(item, unlocks, recipes_map, items_map, &tp_prices_map)
+            charge_unlocks(item, unlocks, game_data, &tp_prices_map)
                 .ok_or_else(|| "Not profitable after buying its recipes, or can't learn one".into())
         }
         Ok(item) => Ok((item, Default::default())),
@@ -197,14 +189,12 @@ pub async fn calc_item_profit(
 fn charge_unlocks(
     mut item: ProfitableItem,
     unlocks: &crafting::RecipeUnlocks,
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
+    game_data: &crafting::GameData,
     tp_prices_map: &HashMap<u32, api::Price>,
 ) -> Option<(ProfitableItem, crafting::RequiredUnlocks)> {
     let required = unlocks.required(
         &item.crafted_items,
-        recipes_map,
-        items_map,
+        game_data,
         tp_prices_map,
         &CONFIG.crafting,
     );
@@ -231,8 +221,7 @@ fn charge_unlocks(
 
 pub fn calculate_crafting_profit(
     item_id: u32,
-    recipes_map: &HashMap<u32, Recipe>,
-    items_map: &HashMap<u32, Item>,
+    game_data: &crafting::GameData,
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     mut purchased_ingredients: Option<
         &mut HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
@@ -250,7 +239,7 @@ pub fn calculate_crafting_profit(
         .map(|(id, listings)| (id, ItemListings::from(listings)))
         .collect();
 
-    let recipe = recipes_map.get(&item_id);
+    let recipe = game_data.recipes.get(&item_id);
     let output = |items: &crafting::CraftedItems| {
         recipe.map(|recipe| (recipe, items.crafted[&item_id] / recipe.output_item_count))
     };
@@ -260,6 +249,7 @@ pub fn calculate_crafting_profit(
     let mut total_crafting_cost = Money::zero();
     let mut crafting_count: u32 = 0;
     let mut crafted_items = crafting::CraftedItems::default();
+    let mut lots = HashMap::new();
     let mut tp_purchases: HashMap<u32, u32> = HashMap::new();
     let mut vendor_purchases: HashSet<u32> = HashSet::new();
     let mut best_score = 0.0;
@@ -285,13 +275,14 @@ pub fn calculate_crafting_profit(
         let mut context = crafting::PreciseCraftingCostContext {
             purchases: vec![],
             items: crafted_items.clone(),
+            being_crafted: vec![],
+            lots: lots.clone(),
         };
 
         let crafting_cost = match crafting::calculate_precise_min_crafting_cost(
             item_id,
             1,
-            recipes_map,
-            items_map,
+            game_data,
             &mut tp_listings_map,
             &mut context,
             opt,
@@ -356,10 +347,10 @@ pub fn calculate_crafting_profit(
         total_crafting_cost += crafting_cost;
         crafting_count += 1;
         crafted_items = context.items;
+        lots = context.lots;
 
         min_sell = min_buy;
-        // Breakeven is based on the last/most expensive to craft
-        breakeven = crafting_cost;
+        breakeven = crafting_cost; // minimum to recoup crafting costs
 
         // Finalize purchases
         for (purchase_id, count, purchase_source) in &context.purchases {
@@ -413,7 +404,7 @@ pub fn calculate_crafting_profit(
         let mut score =
             (listing_profit + leftover_revenue - leftover_cost).to_copper_value() as f64;
         if let Some(gold) = opt.min_per_hour {
-            let seconds = crafted_items.crafting_seconds(item_id, recipes_map)
+            let seconds = crafted_items.crafting_seconds(item_id, &game_data.recipes)
                 + market_seconds(
                     &tp_purchases,
                     vendor_purchases.len(),
@@ -445,8 +436,7 @@ pub fn calculate_crafting_profit(
         }
         return calculate_crafting_profit(
             item_id,
-            recipes_map,
-            items_map,
+            game_data,
             api_listings_map,
             purchased_ingredients,
             &config::CraftingOptions {
@@ -467,8 +457,12 @@ pub fn calculate_crafting_profit(
         max_sell: Money::from_copper(max_sell as i32),
         min_sell: Money::from_copper(min_sell as i32),
         breakeven: breakeven.trading_post_listing_price(),
-        crafting_steps: crafted_items.crafting_steps(recipes_map).to_integer(),
-        crafting_seconds: crafted_items.crafting_seconds(item_id, recipes_map).round() as u32,
+        crafting_steps: crafted_items
+            .crafting_steps(&game_data.recipes)
+            .to_integer(),
+        crafting_seconds: crafted_items
+            .crafting_seconds(item_id, &game_data.recipes)
+            .round() as u32,
         market_seconds: market_seconds(
             &tp_purchases,
             vendor_purchases.len(),
@@ -489,10 +483,10 @@ fn value_leftovers(
 ) -> (Money, Money) {
     let mut cost = Money::zero();
     let mut revenue = Money::zero();
-    for (id, &(count, cost_per_item, _)) in leftovers {
-        cost += cost_per_item * count;
+    for (id, &(count, leftover_cost, _)) in leftovers {
+        cost += leftover_cost;
         if let Some(listings) = tp_listings_map.get(id) {
-            revenue += listings.sale_revenue(count).min(cost_per_item * count);
+            revenue += listings.sale_revenue(count).min(leftover_cost);
         }
     }
     (cost, revenue)

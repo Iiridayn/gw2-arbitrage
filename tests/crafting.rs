@@ -1,6 +1,6 @@
 mod common;
 
-use common::{one_ingredient_maps, tp_listings_map, MockRecipe};
+use common::{one_ingredient_game_data, tp_listings_map, MockRecipe};
 
 use gw2_arbitrage::{
     api::RecipeIngredient,
@@ -42,6 +42,20 @@ fn groups(item_id: u32, recipes: Vec<Recipe>) -> (Vec<Option<usize>>, Vec<String
     let step_groups = crafting::discipline_groups(&mut steps);
     let labels = crafting::disciplines_labels(&steps, &step_groups);
     (step_groups, labels)
+}
+
+#[test]
+fn parts_in_a_loop_keep_their_order() {
+    // 1 is made from 2, whose recipe would use 1; the 1 for it is bought
+    let (step_groups, labels) = groups(
+        1,
+        vec![
+            recipe(1, [Armorsmith], 400, &[2]),
+            recipe(2, [Tailor], 300, &[1]),
+        ],
+    );
+    assert_eq!(step_groups, [Some(0), Some(1)]);
+    assert_eq!(labels, ["T 300", "Am 400"]);
 }
 
 #[test]
@@ -88,19 +102,18 @@ fn forge_and_salvage_need_no_group() {
 #[test]
 fn vendor_preferred_over_merchant_recipe_at_equal_cost() {
     // Jug of Water: 8c from the vendor, or 80c for 10 from a Merchant recipe
-    let (items_map, mut recipes_map) = one_ingredient_maps(1000, 12156, 1);
+    let mut game_data = one_ingredient_game_data(1000, 12156, 1);
     let mut jug_recipe = Recipe::mock(2, 12156, 10, [], &[], true);
     jug_recipe.currencies = vec![CurrencyCost {
         currency_id: 1,
         count: 80,
     }];
-    recipes_map.insert(12156, jug_recipe);
+    game_data.recipes.insert(12156, jug_recipe);
 
     let mut purchased_ingredients = HashMap::new();
     let profitable_item = calculate_crafting_profit(
         1000,
-        &recipes_map,
-        &items_map,
+        &game_data,
         &tp_listings_map(vec![(1000, vec![(100, 1)], vec![])]),
         Some(&mut purchased_ingredients),
         &Default::default(),

@@ -3,7 +3,7 @@ use crate::custom_recipes;
 use crate::money::Money;
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use serde::{Deserialize, Serialize};
@@ -250,58 +250,6 @@ impl Recipe {
             if let Some(recipe) = recipes_map.get(&ingredient.item_id) {
                 recipe.collect_ingredient_ids(recipes_map, ids);
             }
-        }
-    }
-}
-
-/// Output ids of recipes which use their own output, directly or through other recipes. Which
-/// recipe in a multi-item cycle is marked follows the map's iteration order, so it can change
-/// between runs. Only a few Mystic Forge items vary this way, e.g. 36059, 36060, 36061 (Plastic
-/// Fangs, Chattering Skull, Nougat Center), 46730 (Bloodstone Brick), 79653, 79661
-/// (Phospholuminescent Infusions), 91171, 91222 (Condensed Ley-Line Essences)
-pub fn mark_recursive_recipes(recipes_map: &HashMap<u32, Recipe>) -> HashSet<u32> {
-    let mut set = HashSet::new();
-    for (recipe_id, recipe) in recipes_map {
-        mark_recursive_recipes_internal(
-            *recipe_id,
-            recipe.output_item_id,
-            recipes_map,
-            &mut vec![],
-            &mut set,
-        );
-    }
-    set
-}
-
-fn mark_recursive_recipes_internal(
-    item_id: u32,
-    search_output_item_id: u32,
-    recipes_map: &HashMap<u32, Recipe>,
-    ingredients_stack: &mut Vec<u32>,
-    set: &mut HashSet<u32>,
-) {
-    if set.contains(&item_id) {
-        return;
-    }
-    if let Some(recipe) = recipes_map.get(&item_id) {
-        for ingredient in &recipe.ingredients {
-            if ingredient.item_id == search_output_item_id {
-                set.insert(recipe.output_item_id);
-                return;
-            }
-            // skip unnecessary recursion
-            if ingredients_stack.contains(&ingredient.item_id) {
-                continue;
-            }
-            ingredients_stack.push(ingredient.item_id);
-            mark_recursive_recipes_internal(
-                ingredient.item_id,
-                search_output_item_id,
-                recipes_map,
-                ingredients_stack,
-                set,
-            );
-            ingredients_stack.pop();
         }
     }
 }
