@@ -48,6 +48,7 @@ pub struct Config {
     pub rates: [Option<Rational32>; Currency::ALL.len()],
 
     pub cache_dir: PathBuf,
+    pub snapshot_dir: Option<PathBuf>,
     pub api_recipes_file: PathBuf,
     pub custom_recipes_file: PathBuf,
     pub items_file: PathBuf,
@@ -151,6 +152,10 @@ impl Config {
             println!("Failed to flush cache dir {}: {}", &cache_dir.display(), e)
         }
         config.cache_dir = cache_dir;
+        if let Some(dir) = &opt.snapshot {
+            ensure_dir(dir).expect("Failed to create snapshot dir");
+        }
+        config.snapshot_dir = opt.snapshot;
 
         let data_dir = data_dir(&opt.data_dir).expect("Failed to identify data dir");
         ensure_dir(&data_dir).expect("Failed to create data dir");
@@ -289,6 +294,12 @@ struct Opt {
 
     #[structopt(long, parse(from_os_str), help = &CACHE_DIR_HELP)]
     cache_dir: Option<PathBuf>,
+
+    /// Keep trading post prices and listings in this directory and reuse them on later runs, never
+    /// refreshing them; listings not yet in it are fetched and added. For profiling and testing
+    /// against a fixed market
+    #[structopt(long, parse(from_os_str))]
+    snapshot: Option<PathBuf>,
 
     #[structopt(long, parse(from_os_str), help = &DATA_DIR_HELP)]
     data_dir: Option<PathBuf>,

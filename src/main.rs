@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::prelude::*;
+use std::time::Instant;
 
 use config::CONFIG;
 use gw2_arbitrage::*;
@@ -29,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         HashSet::new()
     };
 
+    let mut stage = Instant::now();
     println!("Loading recipes");
     let api_recipes = {
         let mut api_recipes: Vec<api::Recipe> = request::get_data(
@@ -43,9 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_recipes
     };
     println!(
-        "Loaded {} recipes stored at '{}'",
+        "Loaded {} recipes stored at '{}' in {} ms",
         api_recipes.len(),
-        CONFIG.api_recipes_file.display()
+        CONFIG.api_recipes_file.display(),
+        lap_ms(&mut stage)
     );
 
     println!("Loading custom recipes");
@@ -60,9 +63,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![]
     });
     println!(
-        "Loaded {} custom recipes stored at '{}'",
+        "Loaded {} custom recipes stored at '{}' in {} ms",
         custom_recipes.len(),
-        CONFIG.custom_recipes_file.display()
+        CONFIG.custom_recipes_file.display(),
+        lap_ms(&mut stage)
     );
 
     println!("Loading items");
@@ -74,9 +78,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
     println!(
-        "Loaded {} items stored at '{}'",
+        "Loaded {} items stored at '{}' in {} ms",
         items.len(),
-        CONFIG.items_file.display()
+        CONFIG.items_file.display(),
+        lap_ms(&mut stage)
     );
 
     let recipes: Vec<Recipe> = custom_recipes
@@ -148,19 +153,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .flush()
                 .unwrap_or_else(|e| println!("Flush failed: {}", &e));
         };
-        let tp_prices: Vec<api::Price> = request::request_paginated(
-            "commerce/prices",
-            &None,
-            Some(&commerce_notify as &dyn Fn(&str)),
-        )
-        .await?;
+        let tp_prices = request::fetch_tp_prices(Some(&commerce_notify as &dyn Fn(&str))).await?;
         println!();
-        println!("Loaded {} trading post prices", tp_prices.len());
+        println!(
+            "Loaded {} trading post prices in {} ms",
+            tp_prices.len(),
+            lap_ms(&mut stage)
+        );
 
         let tp_prices_map = profit::vec_to_map(tp_prices, |x| x.id);
 
         let (profitable_item_ids, ingredient_ids) =
             profit::find_profitable_items(&tp_prices_map, &game_data);
+        println!(
+            "Found {} candidates in {} ms",
+            profitable_item_ids.len(),
+            lap_ms(&mut stage)
+        );
 
         println!("Loading detailed trading post listings");
         let mut request_listing_item_ids = vec![];
@@ -172,8 +181,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let tp_listings =
             request::fetch_item_listings(&request_listing_item_ids, None, notify).await?;
         println!(
-            "Loaded {} detailed trading post listings",
-            tp_listings.len()
+            "Loaded {} detailed trading post listings in {} ms",
+            tp_listings.len(),
+            lap_ms(&mut stage)
         );
         let tp_listings_map = profit::vec_to_map(tp_listings, |x| x.id);
 
@@ -185,11 +195,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &tp_prices_map,
             &unlocks,
         );
+        println!(
+            "Priced {} items in {} ms",
+            profitable_items.len(),
+            lap_ms(&mut stage)
+        );
 
         print_item_list(&profitable_items, &game_data)?;
     }
 
     Ok(())
+}
+
+/// Milliseconds since `start`, restarting it
+fn lap_ms(start: &mut Instant) -> u128 {
+    let ms = start.elapsed().as_millis();
+    *start = Instant::now();
+    ms
 }
 
 /// Find the craftable item with a word starting with each query word, in any order. An exact name

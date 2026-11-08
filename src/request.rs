@@ -1,4 +1,4 @@
-use crate::api::ItemListings;
+use crate::api::{ItemListings, Price};
 
 use bincode;
 use bincode::{deserialize_from, serialize_into};
@@ -11,17 +11,18 @@ use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
 use serde_json;
 
+use std::cell::Cell;
 use std::collections::hash_map::{DefaultHasher, RandomState};
 use std::collections::HashSet;
 use std::fs::{metadata, File};
 use std::future::Future;
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::io::BufWriter;
+use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
-use crate::config;
+use crate::config::{self, CONFIG};
 
 // Data files older than these unix timestamps are re-fetched; bump to refresh existing users
 pub const API_RECIPES_MIN_TIMESTAMP: u64 = 1793535619;
@@ -47,8 +48,10 @@ pub async fn fetch_item_listings(
     cache_dir: Option<&PathBuf>,
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<Vec<ItemListings>, Box<dyn std::error::Error>> {
-    let mut tp_listings: Vec<ItemListings> =
-        request_item_ids("commerce/listings", item_ids, cache_dir, notify).await?;
+    let mut tp_listings: Vec<ItemListings> = match &CONFIG.snapshot_dir {
+        Some(dir) => fetch_snapshot_listings(item_ids, &dir.join("listings.bin"), notify).await?,
+        None => request_item_ids("commerce/listings", item_ids, cache_dir, notify).await?,
+    };
 
     for listings in &mut tp_listings {
         // by default sells are listed in ascending and buys in descending price.
@@ -58,6 +61,45 @@ pub async fn fetch_item_listings(
     }
 
     Ok(tp_listings)
+}
+
+/// Listings kept at `path`, fetching and adding the ids never asked for; ids off the TP have none
+async fn fetch_snapshot_listings(
+    item_ids: &[u32],
+    path: &Path,
+    notify: Option<&dyn Fn(&str)>,
+) -> Result<Vec<ItemListings>, Box<dyn std::error::Error>> {
+    let (mut asked, mut tp_listings): (HashSet<u32>, Vec<ItemListings>) = match File::open(path) {
+        Ok(file) => deserialize_from(DeflateDecoder::new(file))?,
+        Err(_) => Default::default(),
+    };
+    let missing: Vec<u32> = item_ids
+        .iter()
+        .copied()
+        .filter(|id| !asked.contains(id))
+        .collect();
+    if !missing.is_empty() {
+        tp_listings.extend(request_item_ids("commerce/listings", &missing, None, notify).await?);
+        asked.extend(missing);
+        let stream = BufWriter::new(DeflateEncoder::new(
+            File::create(path)?,
+            Compression::default(),
+        ));
+        serialize_into(stream, &(asked, &tp_listings))?;
+    }
+    let item_ids: HashSet<&u32> = item_ids.iter().collect();
+    tp_listings.retain(|listings| item_ids.contains(&listings.id));
+    Ok(tp_listings)
+}
+
+pub async fn fetch_tp_prices(
+    notify: Option<&dyn Fn(&str)>,
+) -> Result<Vec<Price>, Box<dyn std::error::Error>> {
+    let fetch = || request_paginated("commerce/prices", &None, notify);
+    match &CONFIG.snapshot_dir {
+        Some(dir) => get_data(dir.join("prices.bin"), 0, fetch).await,
+        None => fetch().await,
+    }
 }
 
 pub async fn get_data<T, Fut>(
@@ -194,7 +236,14 @@ where
     T: serde::Serialize,
     T: serde::de::DeserializeOwned,
 {
-    let requests = item_ids.chunks(MAX_ITEM_ID_LENGTH as usize).map(|batch| {
+    let batches = item_ids.chunks(MAX_ITEM_ID_LENGTH as usize);
+    // cached fetches notify their own progress
+    let progress = notify.filter(|_| cache_dir.is_none());
+    if progress.is_some() {
+        print!("Batches ({}):", batches.len());
+    }
+    let done = Cell::new(0);
+    let requests = batches.map(|batch| {
         let item_ids_str: Vec<String> = batch.iter().map(|id| id.to_string()).collect();
 
         let url = format!(
@@ -202,18 +251,29 @@ where
             url_path,
             item_ids_str.join(",")
         );
+        let done = &done;
         async move {
             if let Some(cache_dir) = cache_dir {
-                cached_fetch::<Vec<T>>(&url, cache_dir, notify).await
-            } else {
-                fetch::<Vec<T>>(&url, None, REQUEST_TIMEOUT).await
+                return cached_fetch::<Vec<T>>(&url, cache_dir, notify).await;
             }
+            let result = fetch::<Vec<T>>(&url, None, REQUEST_TIMEOUT).await;
+            if progress.is_some() {
+                done.set(done.get() + 1);
+                print!(" {}", done.get());
+                io::stdout()
+                    .flush()
+                    .unwrap_or_else(|e| println!("Flush failed: {}", &e));
+            }
+            result
         }
     });
     let request_results = stream::iter(requests)
         .buffered(PARALLEL_REQUESTS)
         .collect::<Vec<Result<Vec<T>, Box<dyn std::error::Error>>>>()
         .await;
+    if progress.is_some() {
+        println!();
+    }
 
     let mut result = vec![];
     for batch in request_results.into_iter() {

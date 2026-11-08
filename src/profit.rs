@@ -172,8 +172,7 @@ pub async fn calc_item_profit(
                 .is_empty() =>
         {
             // Unlock items and their crafting ingredients aren't known before crafting is decided
-            let tp_prices: Vec<api::Price> =
-                request::request_paginated("commerce/prices", &None, None).await?;
+            let tp_prices = request::fetch_tp_prices(None).await?;
             let tp_prices_map = vec_to_map(tp_prices, |x| x.id);
             charge_unlocks(item, unlocks, game_data, &tp_prices_map)
                 .ok_or_else(|| "Not profitable after buying its recipes, or can't learn one".into())
