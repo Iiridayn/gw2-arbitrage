@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fs::{metadata, File};
 use std::future::Future;
 use std::hash::{BuildHasher, Hash, Hasher};
+use std::io::BufWriter;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
@@ -76,7 +77,7 @@ where
         match getter().await {
             Ok(items) => {
                 let file = File::create(&data_path)?;
-                let stream = DeflateEncoder::new(file, Compression::default());
+                let stream = BufWriter::new(DeflateEncoder::new(file, Compression::default()));
                 serialize_into(stream, &items)?;
                 return Ok(items);
             }
@@ -267,7 +268,7 @@ where
 
     // save cache file
     let file = File::create(cache_path)?;
-    let stream = DeflateEncoder::new(file, Compression::default());
+    let stream = BufWriter::new(DeflateEncoder::new(file, Compression::default()));
     serialize_into(stream, &v)?;
 
     Ok(v)
