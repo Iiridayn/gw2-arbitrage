@@ -114,8 +114,9 @@ pub fn profitable_item_list(
         .filter_map(|item| charge_unlocks(item, unlocks, game_data, tp_prices_map))
         .collect();
 
+    profitable_items.sort_unstable_by_key(|(item, _)| item.id);
     match CONFIG.sort {
-        config::SortBy::Total => profitable_items.sort_unstable_by_key(|(item, _)| item.profit),
+        config::SortBy::Total => profitable_items.sort_by_key(|(item, _)| item.profit),
         config::SortBy::Hour => {
             profitable_items.sort_by_cached_key(|(item, _)| item.profit_per_hour())
         }
