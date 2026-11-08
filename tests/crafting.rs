@@ -3,8 +3,9 @@ mod common;
 use common::{one_ingredient_game_data, tp_listings_map, MockRecipe};
 
 use gw2_arbitrage::{
-    api::RecipeIngredient,
-    crafting::{self, CraftedItems},
+    api::{Price, PriceInfo, RecipeIngredient},
+    crafting::{self, CraftedItems, GameData, SummaryPrices},
+    money::Money,
     profit::calculate_crafting_profit,
     recipe::{
         CurrencyCost,
@@ -136,4 +137,30 @@ fn hand_off_part_is_made_first() {
         ],
     );
     assert_eq!(step_groups, [Some(1), Some(0), Some(0)]);
+}
+
+#[test]
+fn lower_bound_settles_under_a_promotion_that_uses_its_own_output() {
+    // 250 Copper Ore, 1 Iron Ore and 5 dust make 88 Iron Ore
+    let ingredients =
+        [(2, 250), (1, 1), (3, 5)].map(|(item_id, count)| RecipeIngredient { item_id, count });
+    let game_data = GameData {
+        recipes: HashMap::from([(1, Recipe::mock(1, 1, 88, [], &ingredients, true))]),
+        items: HashMap::new(),
+    };
+    let listed = |id, unit_price| {
+        let sells = PriceInfo {
+            unit_price,
+            quantity: 1000,
+        };
+        let buys = PriceInfo {
+            unit_price: 0,
+            quantity: 0,
+        };
+        (id, Price { id, buys, sells })
+    };
+    let prices = HashMap::from([listed(1, 100), listed(2, 1), listed(3, 1)]);
+    let prices = SummaryPrices::new(prices, &game_data);
+    // ⌊(250 + 2 + 5) / 88⌋, under Iron Ore's 100 listing and its crafted 355 / 88
+    assert_eq!(prices.lower_bounds[&1], Money::from_copper(2));
 }

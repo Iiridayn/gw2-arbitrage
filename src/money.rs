@@ -1,5 +1,5 @@
 use num_rational::Rational32;
-use num_traits::{ToPrimitive, Zero};
+use num_traits::Zero;
 
 use std::array;
 use std::cmp;
@@ -69,25 +69,34 @@ fn div_ceil(n: i64, d: i64) -> i64 {
     -(-n).div_euclid(d)
 }
 
-#[derive(Copy, Clone, Eq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub struct Money {
     copper: i32,
     // indexed by `Currency as usize`
     currencies: [i32; Currency::ALL.len()],
+    value: i32, // copper, with currencies at their rates; split apart from them, so shares are fair
 }
 impl Money {
     pub fn from_copper(copper: i32) -> Self {
         Self {
             copper,
+            value: copper,
             ..Default::default()
         }
     }
     /// None if the currency's rate isn't configured
     pub fn from_currency(currency: Currency, count: u32) -> Option<Self> {
-        CONFIG.rates[currency as usize]?;
+        Some(Self::at_rate(
+            currency,
+            count,
+            CONFIG.rates[currency as usize]?,
+        ))
+    }
+    fn at_rate(currency: Currency, count: u32, rate: Rational32) -> Self {
         let mut money = Self::zero();
         money.currencies[currency as usize] = count as i32;
-        Some(money)
+        money.value = (rate * count as i32).ceil().to_integer();
+        money
     }
     /// Splits this between `count` of `total` items and the rest; the share is rounded up, and the
     /// two always add up to this
@@ -96,6 +105,7 @@ impl Money {
         let share = Self {
             copper: share(self.copper),
             currencies: self.currencies.map(share),
+            value: share(self.value),
         };
         (share, self - share)
     }
@@ -111,17 +121,8 @@ impl Money {
         Self::from_currency(currency, count)
     }
 
-    fn copper_value(&self) -> Rational32 {
-        Currency::ALL
-            .iter()
-            .copied()
-            .fold(Rational32::from(self.copper), |value, currency| {
-                let rate = CONFIG.rates[currency as usize].unwrap_or(Rational32::zero());
-                value + rate * self.currencies[currency as usize]
-            })
-    }
     pub fn to_copper_value(&self) -> i32 {
-        self.copper_value().ceil().to_integer()
+        self.value
     }
 
     fn fee(&self, percent: u8) -> i32 {
@@ -135,20 +136,17 @@ impl Money {
 
     pub fn trading_post_sale_revenue(self) -> Money {
         let fees = self.fee(TRADING_POST_EXCHANGE_FEE) + self.fee(TRADING_POST_LISTING_FEE);
-        Money {
-            copper: if self.copper > fees {
-                self.copper - fees
-            } else {
-                0
-            },
-            ..Default::default()
-        }
+        Money::from_copper(if self.copper > fees {
+            self.copper - fees
+        } else {
+            0
+        })
     }
     /// Has an error of at most 1 copper too high (could have broken even at one copper less)
     pub fn trading_post_listing_price(self) -> Money {
-        let copper = self.copper_value();
-        Money {
-            copper: cmp::max(
+        let copper = Rational32::from(self.value);
+        Money::from_copper(
+            cmp::max(
                 (copper
                     * Rational32::new(
                         100,
@@ -159,25 +157,19 @@ impl Money {
             )
             .ceil()
             .to_integer(),
-            ..Default::default()
-        }
+        )
     }
     /// This will probably not be precise due to rounding errors accumulating as sales are broken
     /// into smaller batches. Would need to calculate this per sale chunk to be precise - but then
     /// the TP sometimes glitches w/small sale volumes, requiring filling them multiple times
     /// anyway, reintroducing rounding errors.
     pub fn increase_by_listing_fee(self) -> Money {
-        Money {
-            copper: self.copper + self.fee(TRADING_POST_LISTING_FEE),
-            currencies: self.currencies,
-        }
+        self + Money::from_copper(self.fee(TRADING_POST_LISTING_FEE))
     }
 
     // Gives an approximate ratio between two money values; for profit on cost
     pub fn percent(self, other: Self) -> f64 {
-        let value = self.copper_value().to_f64().unwrap_or(0_f64);
-        let other_value = other.copper_value().to_f64().unwrap_or(f64::INFINITY);
-        value / other_value
+        self.value as f64 / other.value as f64
     }
 
     fn format_copper(&self) -> String {
@@ -239,6 +231,7 @@ impl Zero for Money {
         Self {
             copper: 0,
             currencies: [0; Currency::ALL.len()],
+            value: 0,
         }
     }
     fn is_zero(&self) -> bool {
@@ -252,6 +245,7 @@ impl std::ops::Add for Money {
         Self {
             copper: self.copper + other.copper,
             currencies: array::from_fn(|i| self.currencies[i] + other.currencies[i]),
+            value: self.value + other.value,
         }
     }
 }
@@ -262,6 +256,7 @@ impl std::ops::Sub for Money {
         Self {
             copper: self.copper - other.copper,
             currencies: array::from_fn(|i| self.currencies[i] - other.currencies[i]),
+            value: self.value - other.value,
         }
     }
 }
@@ -277,6 +272,7 @@ impl std::ops::Mul<u32> for Money {
         Self {
             copper: self.copper * other as i32,
             currencies: self.currencies.map(|count| count * other as i32),
+            value: self.value * other as i32,
         }
     }
 }
@@ -288,11 +284,6 @@ impl std::ops::Div<u32> for Money {
         self.split(1, other).0
     }
 }
-impl PartialEq for Money {
-    fn eq(&self, other: &Self) -> bool {
-        self.copper == other.copper && self.currencies == other.currencies
-    }
-}
 impl PartialOrd for Money {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -300,9 +291,7 @@ impl PartialOrd for Money {
 }
 impl Ord for Money {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let value = self.copper_value();
-        let other_value = other.copper_value();
-        value.cmp(&other_value)
+        self.value.cmp(&other.value)
     }
 }
 impl std::iter::Sum for Money {
@@ -320,6 +309,9 @@ impl fmt::Debug for Money {
         }
         for (currency, units) in self.currency_units() {
             result.field(currency.abbrev(), &units);
+        }
+        if self.value != self.copper {
+            result.field("value", &self.value);
         }
 
         result.finish()
@@ -360,5 +352,32 @@ mod tests {
                     .trading_post_sale_revenue();
             assert!(price <= breakeven && breakeven <= price + epsilon);
         }
+    }
+
+    #[test]
+    fn split_keeps_currencies_whole_and_shares_value_fairly() {
+        let shard = Money::at_rate(SpiritShard, 1, Rational32::from(5000));
+        let (first, rest) = (Money::from_copper(100) + shard).split(1, 10);
+        assert_eq!(
+            first,
+            Money {
+                value: 510,
+                ..Money::from_copper(10) + shard
+            }
+        );
+        assert_eq!(
+            rest,
+            Money {
+                value: 4590,
+                ..Money::from_copper(90)
+            }
+        );
+        assert!(first < rest);
+    }
+
+    #[test]
+    fn currency_value_rounds_up() {
+        let karma = Money::at_rate(Karma, 7, Rational32::new(9, 10));
+        assert_eq!(karma.to_copper_value(), 7);
     }
 }

@@ -161,10 +161,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             lap_ms(&mut stage)
         );
 
-        let tp_prices_map = profit::vec_to_map(tp_prices, |x| x.id);
+        let prices =
+            crafting::SummaryPrices::new(profit::vec_to_map(tp_prices, |x| x.id), &game_data);
+        println!(
+            "Found the lowest possible cost of {} items in {} ms",
+            prices.lower_bounds.len(),
+            lap_ms(&mut stage)
+        );
 
         let (profitable_item_ids, ingredient_ids) =
-            profit::find_profitable_items(&tp_prices_map, &game_data);
+            profit::find_profitable_items(&prices, &game_data);
         println!(
             "Found {} candidates in {} ms",
             profitable_item_ids.len(),
@@ -192,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &profitable_item_ids,
             &request_listing_item_ids,
             &game_data,
-            &tp_prices_map,
+            &prices,
             &unlocks,
         );
         println!(

@@ -805,6 +805,27 @@ fn calculate_crafting_profit_buys_the_own_output_a_promotion_uses() {
 }
 
 #[test]
+fn calculate_crafting_profit_buys_at_the_price_listed_before_a_losing_promotion() {
+    // An ingot from 1 ore; 1 ore and 1 dust make 2 ore, at (10 + 100) / 2 each
+    let game_data = mock_game_data(
+        &[(1, "Ore", 0), (2, "Dust", 0), (3, "Ingot", 0)],
+        &[(3, 1, &[(1, 1)]), (1, 2, &[(1, 1), (2, 1)])],
+    );
+    let tp_listings_map = tp_listings_map(vec![
+        (1, vec![], vec![(10, 1), (20, 1000)]),
+        (2, vec![], vec![(100, 1000)]),
+    ]);
+    let opt = CraftingOptions {
+        value: Some(100000),
+        count: Some(1),
+        ..Default::default()
+    };
+    let profitable_item =
+        calculate_crafting_profit(3, &game_data, &tp_listings_map, None, &opt).unwrap();
+    assert_eq!(profitable_item.crafting_cost, Money::from_copper(10));
+}
+
+#[test]
 fn calculate_crafting_profit_makes_the_count_asked_for_from_part_of_a_batch() {
     let game_data = mock_game_data(
         &[(1, "Batch of 3", 0), (2, "Part", 0)],

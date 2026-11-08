@@ -14,7 +14,7 @@ use config::CONFIG;
 /// Return a items which are profitable to make at least one of, and their ingredients, for further
 /// scrutiny
 pub fn find_profitable_items(
-    tp_prices_map: &HashMap<u32, api::Price>,
+    prices: &crafting::SummaryPrices,
     game_data: &crafting::GameData,
 ) -> (Vec<u32>, Vec<u32>) {
     let mut profitable_item_ids = vec![];
@@ -45,7 +45,7 @@ pub fn find_profitable_items(
         // e.g. 39417, 79557
         // conversely, some items have a NoSell flag but are listable on the trading post
         // e.g. 66917
-        let tp_prices = match tp_prices_map.get(item_id) {
+        let tp_prices = match prices.tp_prices.get(item_id) {
             Some(tp_prices) if tp_prices.sells.quantity > 0 => tp_prices,
             _ => continue,
         };
@@ -57,7 +57,7 @@ pub fn find_profitable_items(
             *item_id,
             1,
             game_data,
-            tp_prices_map,
+            prices,
             None,
             &mut vec![],
             &CONFIG.crafting,
@@ -80,7 +80,7 @@ pub fn profitable_item_list(
     profitable_item_ids: &Vec<u32>,
     request_listing_item_ids: &[u32],
     game_data: &crafting::GameData,
-    tp_prices_map: &HashMap<u32, api::Price>,
+    prices: &crafting::SummaryPrices,
     unlocks: &crafting::RecipeUnlocks,
 ) -> Vec<(ProfitableItem, crafting::RequiredUnlocks)> {
     let profitable_items: Vec<_> = profitable_item_ids
@@ -111,7 +111,7 @@ pub fn profitable_item_list(
         .collect();
     let mut profitable_items: Vec<_> = profitable_items
         .into_iter()
-        .filter_map(|item| charge_unlocks(item, unlocks, game_data, tp_prices_map))
+        .filter_map(|item| charge_unlocks(item, unlocks, game_data, prices))
         .collect();
 
     profitable_items.sort_unstable_by_key(|(item, _)| item.id);
@@ -173,8 +173,8 @@ pub async fn calc_item_profit(
         {
             // Unlock items and their crafting ingredients aren't known before crafting is decided
             let tp_prices = request::fetch_tp_prices(None).await?;
-            let tp_prices_map = vec_to_map(tp_prices, |x| x.id);
-            charge_unlocks(item, unlocks, game_data, &tp_prices_map)
+            let prices = crafting::SummaryPrices::new(vec_to_map(tp_prices, |x| x.id), game_data);
+            charge_unlocks(item, unlocks, game_data, &prices)
                 .ok_or_else(|| "Not profitable after buying its recipes, or can't learn one".into())
         }
         Ok(item) => Ok((item, Default::default())),
@@ -190,14 +190,9 @@ fn charge_unlocks(
     mut item: ProfitableItem,
     unlocks: &crafting::RecipeUnlocks,
     game_data: &crafting::GameData,
-    tp_prices_map: &HashMap<u32, api::Price>,
+    prices: &crafting::SummaryPrices,
 ) -> Option<(ProfitableItem, crafting::RequiredUnlocks)> {
-    let required = unlocks.required(
-        &item.crafted_items,
-        game_data,
-        tp_prices_map,
-        &CONFIG.crafting,
-    );
+    let required = unlocks.required(&item.crafted_items, game_data, prices, &CONFIG.crafting);
     // Can no longer be learned: Wooden Sword, Asuran Harpoon
     if required.contains_key(&5424) || required.contains_key(&6057) {
         return None;
@@ -240,6 +235,17 @@ pub fn calculate_crafting_profit(
         .collect();
 
     let recipe = game_data.recipes.get(&item_id);
+    let mut ids = vec![item_id];
+    if let Some(recipe) = recipe {
+        recipe.collect_ingredient_ids(&game_data.recipes, &mut ids);
+    }
+    let lowest_sells = tp_listings_map.iter().filter_map(|(&id, listings)| {
+        Some((
+            id,
+            Money::from_copper(listings.lowest_sell_offer(1)? as i32),
+        ))
+    });
+    let lower_bounds = crafting::lower_bounds(lowest_sells.collect(), ids.into_iter(), game_data);
     let output = |items: &crafting::CraftedItems| {
         recipe.map(|recipe| (recipe, items.crafted[&item_id] / recipe.output_item_count))
     };
@@ -284,6 +290,7 @@ pub fn calculate_crafting_profit(
             1,
             game_data,
             &mut tp_listings_map,
+            &lower_bounds,
             &mut context,
             opt,
         ) {
