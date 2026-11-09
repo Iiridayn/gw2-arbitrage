@@ -286,14 +286,16 @@ fn print_profitable_item(
         }
     };
 
+    let name = |id: &u32| {
+        let item = game_data.items.get(id);
+        item.map_or_else(|| "???".to_string(), |item| item.to_string())
+    };
+
     println!("============");
     println!(
         "Shopping list for {} x {} = {} profit ({}, {} / hour, {}%)",
         profitable_item.count,
-        game_data
-            .items
-            .get(&item_id)
-            .map_or_else(|| "???".to_string(), |item| item.to_string()),
+        name(&item_id),
         Money::from_copper(profitable_item.profit.to_copper_value()),
         format_duration((profitable_item.crafting_seconds + profitable_item.market_seconds) as f64),
         profitable_item.profit_per_hour(),
@@ -323,6 +325,47 @@ fn print_profitable_item(
         profitable_item.breakeven,
     );
 
+    let mut sorted = profitable_item
+        .crafted_items
+        .sorted(item_id, &game_data.recipes);
+    let step_groups = crafting::discipline_groups(&mut sorted);
+    let labels = crafting::disciplines_labels(&sorted, &step_groups);
+
+    // vendor recipes are bought with the rest, unless they take something crafted first
+    let mut crafted = HashSet::new();
+    let bought: Vec<bool> = sorted
+        .iter()
+        .map(|&(id, _, recipe)| {
+            let uses_crafted = recipe
+                .ingredients
+                .iter()
+                .any(|i| crafted.contains(&i.item_id));
+            let bought = recipe.disciplines.contains(&Discipline::Merchant) && !uses_crafted;
+            if !bought {
+                crafted.insert(id);
+            }
+            bought
+        })
+        .collect();
+
+    // a recipe's ingredients and currencies for `batches`
+    let recipe_price = |recipe: &Recipe, batches: u32| {
+        let mut ingredients = recipe
+            .sorted_ingredients()
+            .iter()
+            .map(|ingredient| {
+                let ingredient_name = name(&ingredient.item_id);
+                format!("{} {}", ingredient.count * batches, ingredient_name)
+            })
+            .collect::<Vec<String>>();
+        if !recipe.currencies.is_empty() {
+            if let Some(cost) = recipe.currency_cost() {
+                ingredients.push((cost * batches).to_string());
+            }
+        }
+        ingredients.join(" ")
+    };
+
     println!("============");
     let mut sorted_ingredients: Vec<(&(u32, crafting::Source), &crafting::PurchasedIngredient)> =
         purchased_ingredients.iter().collect();
@@ -341,7 +384,28 @@ fn print_profitable_item(
             Ordering::Greater
         }
     });
+
     let mut inventory = 0;
+    let mut count_msg = |count: u32, purchase_count: u32| {
+        if purchase_count > 1 && count > purchase_count {
+            let stack_count = count / purchase_count;
+            inventory += count.div_ceil(ITEM_STACK_SIZE);
+            let remainder = count % purchase_count;
+            let remainder_msg = if remainder != 0 {
+                format!(" + {}", remainder)
+            } else {
+                "".to_string()
+            };
+            format!(
+                "{} ({} x {}{})",
+                count, stack_count, purchase_count, remainder_msg
+            )
+        } else {
+            inventory += 1;
+            count.to_string()
+        }
+    };
+
     for ((ingredient_id, ingredient_source), ingredient) in sorted_ingredients {
         let purchase_count = if *ingredient_source == crafting::Source::Vendor {
             game_data
@@ -354,23 +418,7 @@ fn print_profitable_item(
         } else {
             ITEM_STACK_SIZE
         };
-        let ingredient_count_msg = if purchase_count > 1 && ingredient.count > purchase_count {
-            let stack_count = ingredient.count / purchase_count;
-            inventory += ingredient.count.div_ceil(ITEM_STACK_SIZE);
-            let remainder = ingredient.count % purchase_count;
-            let remainder_msg = if remainder != 0 {
-                format!(" + {}", remainder)
-            } else {
-                "".to_string()
-            };
-            format!(
-                "{} ({} x {}{})",
-                ingredient.count, stack_count, purchase_count, remainder_msg
-            )
-        } else {
-            inventory += 1;
-            ingredient.count.to_string()
-        };
+        let ingredient_count_msg = count_msg(ingredient.count, purchase_count);
         let source_msg = match *ingredient_source {
             crafting::Source::TradingPost => {
                 let sparkline = tp_listings_map
@@ -419,11 +467,26 @@ fn print_profitable_item(
         println!(
             "{} {}{}",
             ingredient_count_msg,
-            game_data
-                .items
-                .get(ingredient_id)
-                .map_or_else(|| "???".to_string(), |item| item.to_string()),
+            name(ingredient_id),
             source_msg,
+        );
+    }
+
+    let vendor_steps = sorted.iter().zip(&bought).filter(|(_, &bought)| bought);
+    for (&(item_id, count, recipe), _) in vendor_steps {
+        let lot = recipe.output_item_count;
+        let per_lot = if lot > 1 {
+            format!(" per {}", lot)
+        } else {
+            "".to_string()
+        };
+        println!(
+            "{} {} (vendor: {}{}) Subtotal: {}",
+            count_msg(count, lot),
+            name(&item_id),
+            recipe_price(recipe, 1),
+            per_lot,
+            recipe_price(recipe, count / lot),
         );
     }
 
@@ -452,13 +515,9 @@ fn print_profitable_item(
         profitable_item.count, item_id
     );
     use Discipline::{DoubleClick, Salvage};
-    let mut sorted = profitable_item
-        .crafted_items
-        .sorted(item_id, &game_data.recipes);
-    let step_groups = crafting::discipline_groups(&mut sorted);
-    let labels = crafting::disciplines_labels(&sorted, &step_groups);
     let mut current = None;
-    for (&(item_id, count, recipe), &group) in sorted.iter().zip(&step_groups) {
+    let steps = sorted.iter().zip(&step_groups).zip(&bought);
+    for ((&(item_id, count, recipe), &group), _) in steps.filter(|(_, &bought)| !bought) {
         if let Some(group) = group {
             let label = &labels[group];
             match current {
@@ -476,27 +535,8 @@ fn print_profitable_item(
             ""
         };
         let num_crafted = count / recipe.output_item_count;
-        let item_name = game_data
-            .items
-            .get(&item_id)
-            .map_or_else(|| "???".to_string(), |item| item.to_string());
-        let mut ingredients = recipe
-            .sorted_ingredients()
-            .iter()
-            .map(|ingredient| {
-                let ingredient_name = game_data
-                    .items
-                    .get(&ingredient.item_id)
-                    .map_or_else(|| "???".to_string(), |item| item.to_string());
-                format!("{} {}", ingredient.count * num_crafted, ingredient_name)
-            })
-            .collect::<Vec<String>>();
-        if !recipe.currencies.is_empty() {
-            if let Some(cost) = recipe.currency_cost() {
-                ingredients.push((cost * num_crafted).to_string());
-            }
-        }
-        let ingredients = ingredients.join(" ");
+        let item_name = name(&item_id);
+        let ingredients = recipe_price(recipe, num_crafted);
         if recipe.output_item_count > 1 {
             println!(
                 "{}{} (makes {}) {} from {}",
@@ -511,14 +551,7 @@ fn print_profitable_item(
         let req_recipes = required_unlocks
             .iter()
             .map(|(recipe_id, unlock)| match unlock {
-                Some((unlock_id, cost)) => format!(
-                    "{}, {}",
-                    game_data
-                        .items
-                        .get(unlock_id)
-                        .map_or_else(|| "???".to_string(), |item| item.to_string()),
-                    cost
-                ),
+                Some((unlock_id, cost)) => format!("{}, {}", name(unlock_id), cost),
                 // recipe 5424 for item 29407 has no unlock item, possibly others
                 None => format!("Recipe {} has no unlock item with a price", recipe_id),
             })
@@ -542,10 +575,7 @@ fn print_profitable_item(
             println!(
                 "{} {}, breakeven: {} each",
                 count,
-                game_data
-                    .items
-                    .get(leftover_id)
-                    .map_or_else(|| "???".to_string(), |item| item.to_string()),
+                name(leftover_id),
                 (*cost / *count).trading_post_listing_price(),
             );
         }
