@@ -84,10 +84,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         lap_ms(&mut stage)
     );
 
-    let recipes: Vec<Recipe> = custom_recipes
+    let recipes = api_recipes
         .into_iter()
-        // prefer api recipes over custom recipes if they share the same output item id, by inserting them later
-        .chain(api_recipes.into_iter().map(std::convert::From::from))
+        .map(Recipe::from)
+        // api recipes first, so they're kept over custom recipes that make the same
+        .chain(custom_recipes)
         .filter(|recipe| {
             // Profit can't be calculated unless all of the recipe's currencies have a copper value
             if recipe.currency_cost().is_none() {
@@ -117,12 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             true
-        })
-        .collect();
-    let game_data = crafting::GameData {
-        recipes: profit::vec_to_map(recipes, |x| x.output_item_id),
-        items: profit::vec_to_map(items, |x| x.id),
-    };
+        });
+    let game_data = crafting::GameData::new(recipes, items);
 
     let unlocks = crafting::RecipeUnlocks::new(&game_data.items, &known_recipes);
 
@@ -432,8 +429,8 @@ fn print_profitable_item(
 
     // Mystic Forge recipes with an ingredient repeated need its stack split, once for all of them
     let mut splits: HashMap<u32, usize> = HashMap::new();
-    for id in profitable_item.crafted_items.crafted.keys() {
-        let recipe = &game_data.recipes[id];
+    for (id, index) in profitable_item.crafted_items.crafted.keys() {
+        let recipe = &game_data.recipes[id][*index];
         if !recipe.disciplines.contains(&Discipline::MysticForge) {
             continue;
         }
@@ -454,29 +451,22 @@ fn print_profitable_item(
         "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
         profitable_item.count, item_id
     );
-    use Discipline::{DoubleClick, MysticForge, Salvage};
+    use Discipline::{DoubleClick, Salvage};
     let mut sorted = profitable_item
         .crafted_items
         .sorted(item_id, &game_data.recipes);
     let step_groups = crafting::discipline_groups(&mut sorted);
     let labels = crafting::disciplines_labels(&sorted, &step_groups);
     let mut current = None;
-    let mut at_forge = false;
     for (&(item_id, count, recipe), &group) in sorted.iter().zip(&step_groups) {
-        if recipe.disciplines.contains(&MysticForge) {
-            if !at_forge {
-                println!("Switch to Mystic Forge:");
-            }
-            at_forge = true;
-        } else if let Some(group) = group {
+        if let Some(group) = group {
             let label = &labels[group];
             match current {
                 Some(c) if c != group => println!("Switch to {}:", label),
-                Some(_) if !at_forge => (),
-                _ => println!("On {}:", label),
+                Some(_) => (),
+                None => println!("On {}:", label),
             }
             current = Some(group);
-            at_forge = false;
         }
         let action = if recipe.disciplines.contains(&Salvage) {
             "Salvage "
@@ -663,8 +653,6 @@ fn print_item_list(
             .get(&item_id)
             .map_or_else(|| "???".to_string(), |item| item.to_string());
 
-        let recipe = game_data.recipes.get(&item_id).expect("Missing recipe");
-
         let profit_per_hour = profitable_item.profit_per_hour();
 
         // e.g. "MF+Sr 400+J 400"
@@ -673,14 +661,8 @@ fn print_item_list(
             .sorted(item_id, &game_data.recipes);
         let step_groups = crafting::discipline_groups(&mut sorted);
         let mut labels = crafting::disciplines_labels(&sorted, &step_groups);
-        use Discipline::MysticForge;
-        if sorted
-            .iter()
-            .any(|(_, _, r)| r.disciplines.contains(&MysticForge))
-        {
-            labels.insert(0, MysticForge.get_abbrev());
-        }
         if labels.is_empty() {
+            let recipe = sorted.last().expect("Missing recipe").2;
             let abbrevs: Vec<String> = recipe.disciplines.iter().map(|d| d.get_abbrev()).collect();
             labels.push(abbrevs.join("/"));
         }

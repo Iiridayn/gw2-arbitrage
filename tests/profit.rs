@@ -187,7 +187,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
             // 2 TP buys, 3 ingredients, output, 2 sales
             market_seconds: 10 + 18 + 3 + 10,
             crafted_items: CraftedItems {
-                crafted: HashMap::from([(plus_14_id + 1, 4), (item_id, 2)]),
+                crafted: HashMap::from([((plus_14_id + 1, 0), 4), ((item_id, 0), 2)]),
                 leftovers: HashMap::from([(
                     reagent_id,
                     (
@@ -213,7 +213,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
     let mut recipes_map = HashMap::new();
     recipes_map.insert(
         item_id,
-        Recipe::mock(
+        vec![Recipe::mock(
             7852,
             item_id,
             1,
@@ -229,7 +229,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
                 },
             ],
             true,
-        ),
+        )],
     );
     let mut game_data = GameData {
         recipes: recipes_map,
@@ -243,11 +243,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
     ]);
 
     // A batch of 99 sells into the 98 buy orders, and the last one is left over
-    game_data
-        .recipes
-        .get_mut(&item_id)
-        .unwrap()
-        .output_item_count = 99;
+    game_data.recipes.get_mut(&item_id).unwrap()[0].output_item_count = 99;
     let profitable_item = calculate_crafting_profit(
         item_id,
         &game_data,
@@ -272,7 +268,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             // 2 ingredients, output, 3 price levels
             market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
-                crafted: HashMap::from([(item_id, 99)]),
+                crafted: HashMap::from([((item_id, 0), 99)]),
                 leftovers: HashMap::from([(
                     item_id,
                     (
@@ -285,11 +281,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         })
     );
 
-    game_data
-        .recipes
-        .get_mut(&item_id)
-        .unwrap()
-        .output_item_count = 98;
+    game_data.recipes.get_mut(&item_id).unwrap()[0].output_item_count = 98;
     let profitable_item = calculate_crafting_profit(
         item_id,
         &game_data,
@@ -299,7 +291,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
     );
     let crafting_cost = Money::from_copper(43 + 90 + 92);
     let mut crafted = HashMap::new();
-    crafted.insert(item_id, 98);
+    crafted.insert((item_id, 0), 98);
     assert_eq!(
         profitable_item,
         Ok(ProfitableItem {
@@ -329,11 +321,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         4 // ((43 + 90 + 92) / 98) / (85/100); min of 2 copper added, rounded down since we front-load cost
     );
 
-    game_data
-        .recipes
-        .get_mut(&item_id)
-        .unwrap()
-        .output_item_count = 3;
+    game_data.recipes.get_mut(&item_id).unwrap()[0].output_item_count = 3;
     let profitable_item = calculate_crafting_profit(
         item_id,
         &game_data,
@@ -359,7 +347,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             // 2 ingredients, output, 3 price levels
             market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
-                crafted: HashMap::from([(item_id, 99)]),
+                crafted: HashMap::from([((item_id, 0), 99)]),
                 leftovers: HashMap::from([(
                     item_id,
                     (
@@ -467,7 +455,7 @@ fn calculate_crafting_profit_unknown_recipe_test() {
         if let Some(recipe_id) = item.recipe_id {
             recipes_map.insert(
                 item.id,
-                Recipe::mock(
+                vec![Recipe::mock(
                     recipe_id,
                     item.id,
                     1,
@@ -481,7 +469,7 @@ fn calculate_crafting_profit_unknown_recipe_test() {
                         })
                         .collect::<Vec<_>>(),
                     false,
-                ),
+                )],
             );
         }
 
@@ -550,7 +538,7 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
     let mut recipes_map = HashMap::new();
     recipes_map.insert(
         1000,
-        Recipe::mock(
+        vec![Recipe::mock(
             300,
             1000,
             1,
@@ -566,11 +554,11 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
                 },
             ],
             true,
-        ),
+        )],
     );
     recipes_map.insert(
         2100,
-        Recipe::mock(
+        vec![Recipe::mock(
             301,
             2100,
             5,
@@ -580,7 +568,7 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
                 count: 1,
             }],
             true,
-        ),
+        )],
     );
 
     let tp_listings_map = tp_listings_map(vec![
@@ -618,8 +606,8 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
         (1, Money::from_copper(30), crafting::Source::Crafting),
     );
     let mut crafted = HashMap::new();
-    crafted.insert(1000, 51);
-    crafted.insert(2100, 40);
+    crafted.insert((1000, 0), 51);
+    crafted.insert((2100, 0), 40);
     assert_eq!(
         profitable_item,
         Ok(ProfitableItem {
@@ -697,18 +685,33 @@ type MockRecipeSpec<'a> = (u32, u32, &'a [(u32, u32)]);
 fn mock_game_data(items: &[(u32, &str, u32)], recipes: &[MockRecipeSpec]) -> GameData {
     let items = items
         .iter()
-        .map(|&(id, name, value)| (id, Item::mock(id, name, value)));
+        .map(|&(id, name, value)| Item::mock(id, name, value));
     let recipe = |&(id, count, ingredients): &MockRecipeSpec| {
         let ingredients: Vec<RecipeIngredient> = ingredients
             .iter()
             .map(|&(item_id, count)| RecipeIngredient { item_id, count })
             .collect();
-        (id, Recipe::mock(id, id, count, [], &ingredients, true))
+        Recipe::mock(id, id, count, [], &ingredients, true)
     };
-    GameData {
-        recipes: recipes.iter().map(recipe).collect(),
-        items: items.collect(),
-    }
+    GameData::new(recipes.iter().map(recipe), items.collect())
+}
+
+/// `count` of the item, valued high
+fn valued_high(
+    item_id: u32,
+    count: u32,
+    game_data: &GameData,
+    tp_listings_map: &HashMap<u32, ItemListings>,
+) -> ProfitableItem {
+    let opt = CraftingOptions {
+        value: Some(100000),
+        count: Some(count),
+        ..Default::default()
+    };
+    let profitable_item =
+        calculate_crafting_profit(item_id, game_data, tp_listings_map, None, &opt).unwrap();
+    assert_eq!(profitable_item.count, count);
+    profitable_item
 }
 
 /// How many of `ingredient_id` are crafted for `count` of the item, valued high
@@ -719,16 +722,82 @@ fn crafted_ingredients(
     game_data: &GameData,
     tp_listings_map: &HashMap<u32, ItemListings>,
 ) -> u32 {
-    let opt = CraftingOptions {
-        value: Some(100000),
-        count: Some(count),
-        ..Default::default()
-    };
-    let profitable_item =
-        calculate_crafting_profit(item_id, game_data, tp_listings_map, None, &opt).unwrap();
-    assert_eq!(profitable_item.count, count);
-    let crafted = profitable_item.crafted_items.crafted.get(&ingredient_id);
-    crafted.copied().unwrap_or(0)
+    let crafted = valued_high(item_id, count, game_data, tp_listings_map)
+        .crafted_items
+        .crafted;
+    let crafted = crafted.iter().filter(|((id, _), _)| *id == ingredient_id);
+    crafted.map(|(_, count)| count).sum()
+}
+
+/// Item 1 from one of 2, or from one of 3
+fn two_recipes() -> GameData {
+    mock_game_data(&[], &[(1, 1, &[(2, 1)]), (1, 1, &[(3, 1)])])
+}
+
+#[test]
+fn calculate_crafting_profit_takes_the_cheaper_recipe() {
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(100, 1000)]),
+        (3, vec![], vec![(50, 1000)]),
+    ]);
+    let profitable_item = valued_high(1, 1, &two_recipes(), &tp_listings_map);
+    let crafted = profitable_item.crafted_items.crafted;
+    assert_eq!(crafted, HashMap::from([((1, 1), 1)]));
+}
+
+#[test]
+fn calculate_crafting_profit_takes_the_faster_of_recipes_that_cost_the_same() {
+    let mut game_data = two_recipes();
+    game_data.recipes.get_mut(&1).unwrap()[0].time_to_craft_ms = Some(5000);
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(50, 1000)]),
+        (3, vec![], vec![(50, 1000)]),
+    ]);
+    let profitable_item = valued_high(1, 1, &game_data, &tp_listings_map);
+    let crafted = profitable_item.crafted_items.crafted;
+    assert_eq!(crafted, HashMap::from([((1, 1), 1)]));
+}
+
+#[test]
+fn calculate_crafting_profit_takes_the_recipe_with_less_to_buy_at_the_same_cost() {
+    let game_data = mock_game_data(&[], &[(1, 1, &[(2, 1), (3, 1)]), (1, 1, &[(4, 2)])]);
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(50, 1000)]),
+        (3, vec![], vec![(50, 1000)]),
+        (4, vec![], vec![(50, 1000)]),
+    ]);
+    let profitable_item = valued_high(1, 1, &game_data, &tp_listings_map);
+    let crafted = profitable_item.crafted_items.crafted;
+    assert_eq!(crafted, HashMap::from([((1, 1), 1)]));
+}
+
+#[test]
+fn calculate_crafting_profit_switches_recipes_when_the_cheaper_runs_out() {
+    // 2 is the cheaper ingredient for only its first 2 listed
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(50, 2), (200, 1000)]),
+        (3, vec![], vec![(100, 1000)]),
+    ]);
+    let profitable_item = valued_high(1, 4, &two_recipes(), &tp_listings_map);
+    let crafted = profitable_item.crafted_items.crafted;
+    assert_eq!(crafted, HashMap::from([((1, 0), 2), ((1, 1), 2)]));
+}
+
+#[test]
+fn calculate_crafting_profit_sells_while_crafting_each_recipe_of_the_output() {
+    let mut game_data = two_recipes();
+    for recipe in game_data.recipes.get_mut(&1).unwrap() {
+        recipe.time_to_craft_ms = Some(0);
+    }
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(50, 130), (200, 1000)]),
+        (3, vec![], vec![(100, 1000)]),
+    ]);
+    let profitable_item = valued_high(1, 261, &game_data, &tp_listings_map);
+    let crafted = &profitable_item.crafted_items.crafted;
+    assert_eq!(*crafted, HashMap::from([((1, 0), 130), ((1, 1), 131)]));
+    // 2 buys, 2 ingredients, output, 2 sales less 1s of crafting by each recipe
+    assert_eq!(profitable_item.market_seconds, 10 + 12 + 3 + 8);
 }
 
 /// Bowls of Baker's Dry Ingredients crafted for 120 Homemade Campfire Treats (x12, 8 bowls
@@ -892,7 +961,7 @@ mod data {
         for (id, recipe_id) in (49425..=49439).zip(7851..=7865) {
             recipes_map.insert(
                 id,
-                Recipe::mock(
+                vec![Recipe::mock(
                     recipe_id,
                     id,
                     1,
@@ -908,7 +977,7 @@ mod data {
                         },
                     ],
                     true,
-                ),
+                )],
             );
         }
 

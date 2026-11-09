@@ -42,9 +42,9 @@ pub enum Discipline {
 }
 
 impl Discipline {
-    /// Crafting professions, which are levelled per character and listed first
-    pub fn is_crafting(&self) -> bool {
-        *self as u8 <= Discipline::Scribe as u8
+    /// Crafting professions and the Mystic Forge, each needing its station; listed first
+    pub fn is_station(&self) -> bool {
+        *self as u8 <= Discipline::MysticForge as u8
     }
 
     pub fn get_abbrev(&self) -> String {
@@ -70,7 +70,7 @@ pub enum RecipeSource {
     Achievement,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CurrencyCost {
     pub currency_id: u32, // id from /v2/currencies
     pub count: u32,
@@ -241,15 +241,27 @@ impl Recipe {
         ingredients
     }
 
-    pub fn collect_ingredient_ids(&self, recipes_map: &HashMap<u32, Recipe>, ids: &mut Vec<u32>) {
-        for ingredient in &self.ingredients {
-            if ids.contains(&ingredient.item_id) {
-                continue;
-            }
-            ids.push(ingredient.item_id);
-            if let Some(recipe) = recipes_map.get(&ingredient.item_id) {
-                recipe.collect_ingredient_ids(recipes_map, ids);
-            }
+    /// Whether `other` makes as many from the same, by the same disciplines
+    pub fn is_same_as(&self, other: &Recipe) -> bool {
+        self.output_item_count == other.output_item_count
+            && self.disciplines == other.disciplines
+            && self.sorted_ingredients() == other.sorted_ingredients()
+            && self.currencies == other.currencies
+    }
+}
+
+/// Add the ids of everything that can go into `item_id`, by any of its recipes
+pub fn collect_ingredient_ids(
+    item_id: u32,
+    recipes_map: &HashMap<u32, Vec<Recipe>>,
+    ids: &mut Vec<u32>,
+) {
+    let recipes = recipes_map.get(&item_id).into_iter().flatten();
+    for ingredient in recipes.flat_map(|recipe| &recipe.ingredients) {
+        if ids.contains(&ingredient.item_id) {
+            continue;
         }
+        ids.push(ingredient.item_id);
+        collect_ingredient_ids(ingredient.item_id, recipes_map, ids);
     }
 }

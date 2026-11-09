@@ -7,6 +7,7 @@ use crate::api;
 use crate::config;
 use crate::crafting;
 use crate::money::Money;
+use crate::recipe;
 use crate::request;
 use crate::trading_post::{market_seconds, ItemListings};
 use config::CONFIG;
@@ -19,7 +20,7 @@ pub fn find_profitable_items(
 ) -> (Vec<u32>, Vec<u32>) {
     let mut profitable_item_ids = vec![];
     let mut ingredient_ids = vec![];
-    for (item_id, recipe) in &game_data.recipes {
+    for (item_id, recipes) in &game_data.recipes {
         if let Some(item) = game_data.items.get(item_id) {
             // we cannot sell restricted items
             if item.is_restricted() {
@@ -30,7 +31,10 @@ pub fn find_profitable_items(
         if let Some(filter_disciplines) = &CONFIG.filter_disciplines {
             let mut has_discipline = false;
             for discipline in filter_disciplines {
-                if recipe.disciplines.iter().any(|s| s == discipline) {
+                if recipes
+                    .iter()
+                    .any(|recipe| recipe.disciplines.contains(discipline))
+                {
                     has_discipline = true;
                     break;
                 }
@@ -66,7 +70,7 @@ pub fn find_profitable_items(
                 Money::from_copper(tp_prices.buys.unit_price as i32).trading_post_sale_revenue();
             if effective_buy_price > crafting_cost {
                 profitable_item_ids.push(*item_id);
-                recipe.collect_ingredient_ids(&game_data.recipes, &mut ingredient_ids);
+                recipe::collect_ingredient_ids(*item_id, &game_data.recipes, &mut ingredient_ids);
             }
         }
     }
@@ -87,9 +91,7 @@ pub fn profitable_item_list(
         .par_iter()
         .filter_map(|item_id| {
             let mut ingredient_ids = vec![*item_id];
-            if let Some(recipe) = game_data.recipes.get(item_id) {
-                recipe.collect_ingredient_ids(&game_data.recipes, &mut ingredient_ids);
-            }
+            recipe::collect_ingredient_ids(*item_id, &game_data.recipes, &mut ingredient_ids);
 
             let mut tp_listings_map_for_item: HashMap<u32, _> = HashMap::new();
             for id in ingredient_ids {
@@ -141,9 +143,7 @@ pub async fn calc_item_profit(
     Box<dyn std::error::Error>,
 > {
     let mut items_to_price = vec![];
-    if let Some(recipe) = game_data.recipes.get(&item_id) {
-        recipe.collect_ingredient_ids(&game_data.recipes, &mut items_to_price);
-    }
+    recipe::collect_ingredient_ids(item_id, &game_data.recipes, &mut items_to_price);
 
     let mut request_listing_item_ids = vec![item_id];
     request_listing_item_ids.extend(items_to_price);
@@ -234,11 +234,8 @@ pub fn calculate_crafting_profit(
         .map(|(id, listings)| (id, ItemListings::from(listings)))
         .collect();
 
-    let recipe = game_data.recipes.get(&item_id);
     let mut ids = vec![item_id];
-    if let Some(recipe) = recipe {
-        recipe.collect_ingredient_ids(&game_data.recipes, &mut ids);
-    }
+    recipe::collect_ingredient_ids(item_id, &game_data.recipes, &mut ids);
     let lowest_sells = tp_listings_map.iter().filter_map(|(&id, listings)| {
         Some((
             id,
@@ -247,7 +244,12 @@ pub fn calculate_crafting_profit(
     });
     let lower_bounds = crafting::lower_bounds(lowest_sells.collect(), ids.into_iter(), game_data);
     let output = |items: &crafting::CraftedItems| {
-        recipe.map(|recipe| (recipe, items.crafted[&item_id] / recipe.output_item_count))
+        let crafted = items.crafted.iter().filter(|((id, _), _)| *id == item_id);
+        let output = crafted.map(|(&(id, index), &count)| {
+            let recipe = &game_data.recipes[&id][index];
+            (recipe, count / recipe.output_item_count)
+        });
+        output.collect::<Vec<_>>()
     };
     let min_profit = Money::from_copper(opt.min_per_item.unwrap_or(0) as i32);
 
@@ -283,6 +285,7 @@ pub fn calculate_crafting_profit(
             items: crafted_items.clone(),
             being_crafted: vec![],
             lots: lots.clone(),
+            seconds: 0.0,
         };
 
         let crafting_cost = match crafting::calculate_precise_min_crafting_cost(
@@ -418,7 +421,7 @@ pub fn calculate_crafting_profit(
                     &buy_order_quantities,
                     crafting_count,
                     opt.value.is_some(),
-                    output(&crafted_items),
+                    &output(&crafted_items),
                 ) as f64;
             score -= gold as f64 * 10000.0 * seconds / 3600.0;
         }
@@ -476,7 +479,7 @@ pub fn calculate_crafting_profit(
             &buy_order_quantities,
             crafting_count,
             opt.value.is_some(),
-            output(&crafted_items),
+            &output(&crafted_items),
         ),
         crafted_items,
     })

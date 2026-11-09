@@ -45,7 +45,7 @@ impl Recipe {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RecipeIngredient {
     pub item_id: u32,
     pub count: u32,

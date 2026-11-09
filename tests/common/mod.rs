@@ -97,7 +97,7 @@ pub fn one_ingredient_game_data(
     let mut recipes_map = HashMap::new();
     recipes_map.insert(
         item_id,
-        Recipe::mock(
+        vec![Recipe::mock(
             1,
             item_id,
             1,
@@ -107,7 +107,7 @@ pub fn one_ingredient_game_data(
                 count: 1,
             }],
             true,
-        ),
+        )],
     );
     GameData {
         recipes: recipes_map,

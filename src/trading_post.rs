@@ -25,7 +25,7 @@ pub fn market_seconds(
     buy_order_quantities: &[u32],
     sold: u32,
     fixed_value: bool,
-    output: Option<(&Recipe, u32)>, // and its batches crafted
+    output: &[(&Recipe, u32)], // its recipes and batches crafted
 ) -> u32 {
     let buys: u32 = tp_purchases
         .values()
@@ -48,9 +48,14 @@ pub fn market_seconds(
     };
     let selling = sales.min(SALES_BEFORE_COOLDOWN) as f64 * TP_ACTION_SECONDS
         + sales.saturating_sub(SALES_BEFORE_COOLDOWN) as f64 * SALE_COOLDOWN_SECONDS;
-    let output_crafting = output.map_or(0.0, |(recipe, batches)| recipe.crafting_seconds(batches));
-    // the forge crafts one at a time, so only the last sale must wait
-    let forged = output.is_some_and(|(recipe, _)| recipe.disciplines.contains(&MysticForge));
+    let output_crafting: f64 = output
+        .iter()
+        .map(|&(recipe, batches)| recipe.crafting_seconds(batches))
+        .sum();
+    // the Mystic Forge crafts one at a time, so only the last sale must wait
+    let forged = output
+        .iter()
+        .all(|(recipe, _)| recipe.disciplines.contains(&MysticForge));
     let selling_after_crafting = if forged {
         TP_ACTION_SECONDS
     } else {
