@@ -124,6 +124,7 @@ pub fn profitable_item_list(
         }
         config::SortBy::Roi => profitable_items
             .sort_by(|(a, _), (b, _)| a.profit_on_cost().total_cmp(&b.profit_on_cost())),
+        config::SortBy::Unit => profitable_items.sort_by_key(|(item, _)| item.profit_per_item()),
     }
 
     profitable_items

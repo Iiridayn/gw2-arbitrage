@@ -283,8 +283,8 @@ struct Opt {
     #[structopt(short = "d", long = "disciplines", use_delimiter = true, help = &DISCIPLINES_HELP, parse(try_from_str = get_discipline))]
     filter_disciplines: Option<Vec<Discipline>>,
 
-    /// Sort the item list by "total" profit, profit per "hour", or "roi". Defaults to "hour" with
-    /// --min-per-hour, otherwise "total"
+    /// Sort the item list by "total" profit, "unit" profit, profit per "hour", or "roi". Defaults
+    /// to "hour" with --min-per-hour, otherwise "total"
     #[structopt(long, parse(try_from_str = get_sort))]
     sort: Option<SortBy>,
 
@@ -400,6 +400,7 @@ pub enum SortBy {
     Total,
     Hour,
     Roi,
+    Unit,
 }
 
 fn get_sort<SortBy: FromStr + VariantNames>(
