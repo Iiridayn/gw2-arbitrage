@@ -8,7 +8,6 @@ use crate::trading_post;
 use num_rational::Ratio;
 use num_traits::Zero;
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Logging out and in to use another character's crafting disciplines
@@ -30,6 +29,7 @@ pub struct EstimatedCraftingCost {
 pub struct GameData {
     pub recipes: HashMap<u32, Vec<Recipe>>, // output item id, its recipes
     pub items: HashMap<u32, Item>,
+    pub unlocked_by: HashMap<u32, Vec<u32>>, // recipe id, the items that unlock it
 }
 
 impl GameData {
@@ -42,10 +42,39 @@ impl GameData {
                 kept.push(recipe);
             }
         }
+        let mut unlocked_by: HashMap<u32, Vec<u32>> = HashMap::new();
+        for item in &items {
+            for recipe_id in item.recipe_unlocks().into_iter().flatten() {
+                unlocked_by.entry(recipe_id).or_default().push(item.id);
+            }
+        }
+        // so ties between unlock items always go the same way
+        unlocked_by.values_mut().for_each(|ids| ids.sort_unstable());
         GameData {
             recipes: recipes_map,
             items: items.into_iter().map(|item| (item.id, item)).collect(),
+            unlocked_by,
         }
+    }
+
+    /// Every item crafting `item_id` can touch, by any of each item's recipes, each once. Given
+    /// `known_recipes`, also the unlock items of the recipes not in it, and their trees, as the
+    /// plan may buy or craft them. Both the listings to fetch and the lower bounds need all of
+    /// these.
+    pub fn collect_tree_ids(&self, item_id: u32, known_recipes: Option<&HashSet<u32>>) -> Vec<u32> {
+        let (mut ids, mut pending) = (HashSet::new(), vec![item_id]);
+        while let Some(id) = pending.pop() {
+            if !ids.insert(id) {
+                continue;
+            }
+            for recipe in self.recipes.get(&id).into_iter().flatten() {
+                pending.extend(recipe.ingredients.iter().map(|i| i.item_id));
+                if let Some(id) = known_recipes.and_then(|known| recipe.filter_unknown_id(known)) {
+                    pending.extend(self.unlocked_by.get(&id).into_iter().flatten());
+                }
+            }
+        }
+        ids.into_iter().collect()
     }
 }
 
@@ -127,109 +156,17 @@ fn recipe_bound(recipe: &Recipe, count: u32, lower_bounds: &HashMap<u32, Money>)
     )
 }
 
-/// Recipe id to its cheapest unlock item id and estimated cost, or None if it has none with a price
-pub type RequiredUnlocks = BTreeMap<u32, Option<(u32, Money)>>;
-
-/// Items that unlock recipes, for costing recipes the account doesn't know
-pub struct RecipeUnlocks<'a> {
-    pub known_recipes: &'a HashSet<u32>,
-    // recipe id to unlock item ids
-    unlock_items: HashMap<u32, Vec<u32>>,
-    // recipes being costed, so an unlock chain can't loop back to itself
-    visiting: RefCell<HashSet<u32>>,
-}
-
-impl<'a> RecipeUnlocks<'a> {
-    pub fn new(items_map: &HashMap<u32, Item>, known_recipes: &'a HashSet<u32>) -> Self {
-        let mut unlock_items: HashMap<u32, Vec<u32>> = HashMap::new();
-        for item in items_map.values() {
-            for recipe_id in item.recipe_unlocks().into_iter().flatten() {
-                unlock_items.entry(recipe_id).or_default().push(item.id);
-            }
-        }
-        RecipeUnlocks {
-            known_recipes,
-            unlock_items,
-            visiting: Default::default(),
-        }
-    }
-
-    /// Unlock items needed for the recipes used in crafting
-    pub fn required(
-        &self,
-        crafted_items: &CraftedItems,
-        game_data: &GameData,
-        prices: &SummaryPrices,
-        opt: &config::CraftingOptions,
-    ) -> RequiredUnlocks {
-        crafted_items
-            .unknown_recipes(&game_data.recipes, self.known_recipes)
-            .into_iter()
-            .map(|recipe_id| {
-                let unlock = self.cheapest_unlock(recipe_id, game_data, prices, opt);
-                (recipe_id, unlock)
-            })
-            .collect()
-    }
-
-    /// Cost of a recipe's cheapest unlock item; zero if the recipe is known
-    fn cost(
-        &self,
-        recipe: &Recipe,
-        game_data: &GameData,
-        prices: &SummaryPrices,
-        opt: &config::CraftingOptions,
-    ) -> Option<Money> {
-        match recipe.id {
-            Some(id) if !recipe.is_automatic() && !self.known_recipes.contains(&id) => self
-                .cheapest_unlock(id, game_data, prices, opt)
-                .map(|(_, cost)| cost),
-            _ => Some(Money::zero()),
-        }
-    }
-
-    fn cheapest_unlock(
-        &self,
-        recipe_id: u32,
-        game_data: &GameData,
-        prices: &SummaryPrices,
-        opt: &config::CraftingOptions,
-    ) -> Option<(u32, Money)> {
-        if !self.visiting.borrow_mut().insert(recipe_id) {
-            return None;
-        }
-        let cheapest = self
-            .unlock_items
-            .get(&recipe_id)
-            .into_iter()
-            .flatten()
-            .filter_map(|&item_id| {
-                let cost = calculate_estimated_min_crafting_cost(
-                    item_id,
-                    1,
-                    game_data,
-                    prices,
-                    Some(self),
-                    &mut vec![],
-                    opt,
-                )?;
-                Some((item_id, cost.cost))
-            })
-            .min_by_key(|&(_, cost)| cost);
-        self.visiting.borrow_mut().remove(&recipe_id);
-        cheapest
-    }
-}
+/// Recipe id to the unlock item bought or crafted for it and its cost, or None if none could be
+/// priced
+pub type RecipeUnlocks = BTreeMap<u32, Option<(u32, Money)>>;
 
 // Calculate the lowest cost method to obtain count of the given item, using only the current high/low
 // tp prices. This may involve a combination of crafting, trading and buying from vendors.
-// Unlock item prices are best-effort estimated
 pub fn calculate_estimated_min_crafting_cost(
     item_id: u32,
     count: u32,
     game_data: &GameData,
     prices: &SummaryPrices,
-    unlocks: Option<&RecipeUnlocks>,
     being_crafted: &mut Vec<u32>,
     opt: &config::CraftingOptions,
 ) -> Option<EstimatedCraftingCost> {
@@ -268,7 +205,6 @@ pub fn calculate_estimated_min_crafting_cost(
                     ingredient.count * batches,
                     game_data,
                     prices,
-                    unlocks,
                     being_crafted,
                     opt,
                 );
@@ -284,12 +220,8 @@ pub fn calculate_estimated_min_crafting_cost(
                 }
             }
 
-            let unlock_cost = match unlocks {
-                Some(unlocks) => unlocks.cost(recipe, game_data, prices, opt)?,
-                None => Money::zero(),
-            };
             let (share, _leftovers) = cost.split(count, batches * recipe.output_item_count);
-            Some(share + unlock_cost)
+            Some(share)
         }
     };
     let mut crafting_cost = None;
@@ -339,6 +271,7 @@ pub struct PreciseCraftingCostContext {
 pub struct CraftedItems {
     pub crafted: HashMap<(u32, usize), u32>, // (id, recipe index), count
     pub leftovers: HashMap<u32, (u32, Money, Source)>, // id, (count, total cost, source)
+    pub unlocks: RecipeUnlocks,
 }
 
 impl CraftedItems {
@@ -365,7 +298,7 @@ impl CraftedItems {
                 recipe.crafting_seconds(count / recipe.output_item_count)
             })
             .sum();
-        let step_groups = discipline_groups(&mut self.sorted(item_id, recipes_map));
+        let step_groups = discipline_groups(&mut self.sorted(item_id, recipes_map), &self.unlocks);
         let groups: Vec<usize> = step_groups.into_iter().flatten().collect();
         let switches = groups.windows(2).filter(|w| w[0] != w[1]).count();
         crafting + switches as f64 * CHARACTER_SWITCH_SECONDS
@@ -379,11 +312,7 @@ impl CraftedItems {
         let mut unknown_recipes = HashSet::new();
         for &(item_id, index) in self.crafted.keys() {
             let recipe = &recipes_map[&item_id][index];
-            if let Some(id) = recipe.id {
-                if !recipe.is_automatic() && !known_recipes.contains(&id) {
-                    unknown_recipes.insert(id);
-                }
-            }
+            unknown_recipes.extend(recipe.filter_unknown_id(known_recipes));
         }
         unknown_recipes
     }
@@ -457,15 +386,19 @@ impl CraftedItems {
         item_id: u32,
         recipes_map: &'a HashMap<u32, Vec<Recipe>>,
     ) -> Vec<(u32, u32, &'a Recipe)> {
-        self.sort_ingredients(std::iter::once(item_id), recipes_map, &mut vec![])
-            .1
+        let unlock_ids = self.unlocks.values().flatten().map(|&(id, _)| id);
+        let item_ids = std::iter::once(item_id).chain(unlock_ids);
+        self.sort_ingredients(item_ids, recipes_map, &mut vec![]).1
     }
 }
 
 /// Group crafting station steps, starting from the most restrictive step, and
 /// reorder the steps to avoid switching back to a group. Returns each step's
 /// group index; None for steps not at a station (salvage, double click, …).
-pub fn discipline_groups(steps: &mut Vec<(u32, u32, &Recipe)>) -> Vec<Option<usize>> {
+pub fn discipline_groups(
+    steps: &mut Vec<(u32, u32, &Recipe)>,
+    unlocks: &RecipeUnlocks,
+) -> Vec<Option<usize>> {
     let disciplines = |recipe: &Recipe| -> Vec<Discipline> {
         let crafting = recipe.disciplines.iter().copied();
         crafting.filter(Discipline::is_station).collect()
@@ -492,15 +425,22 @@ pub fn discipline_groups(steps: &mut Vec<(u32, u32, &Recipe)>) -> Vec<Option<usi
     }
 
     // Working back from the last step, take the latest step whose output is no
-    // longer needed, preferring the current group
+    // longer needed, as an ingredient or to learn a recipe, preferring the current group
     let mut remaining: Vec<usize> = (0..steps.len()).collect();
     let mut order = vec![];
     let mut current = None;
     while !remaining.is_empty() {
         let used = |i: usize| {
             let output = steps[i].0;
-            let uses =
-                |&j: &usize| j != i && steps[j].2.ingredients.iter().any(|g| g.item_id == output);
+            let learns = |recipe: &Recipe| {
+                let unlock = recipe.id.and_then(|id| *unlocks.get(&id)?);
+                unlock.is_some_and(|(unlock_id, _)| unlock_id == output)
+            };
+            let uses = |&j: &usize| {
+                let recipe = steps[j].2;
+                let ingredient = recipe.ingredients.iter().any(|g| g.item_id == output);
+                j != i && (ingredient || learns(recipe))
+            };
             remaining.iter().any(uses)
         };
         let ready = || remaining.iter().rev().copied().filter(|&i| !used(i));
@@ -679,6 +619,9 @@ fn price_from_one_source(
     let mut best: Option<((Money, f64, usize), Money, PreciseCraftingCostContext)> = None;
     context.being_crafted.push(item_id);
     for (index, recipe) in tried {
+        let batches = item_count.div_ceil(recipe.output_item_count);
+        let output_count = batches * recipe.output_item_count;
+
         // skip what can't win; an equal bound is still tried, so time can break the tie
         let skip = bounds[index].is_some_and(|bound| {
             buying.is_some_and(|buying| bound >= buying)
@@ -686,13 +629,17 @@ fn price_from_one_source(
                     .as_ref()
                     .is_some_and(|((share, ..), ..)| bound > *share)
         });
-        if skip {
+        let made_so_far = context.items.crafted.get(&(item_id, index)).copied();
+        let would_make = made_so_far.unwrap_or(0) + output_count;
+        let too_many = opt
+            .caps
+            .get(&(item_id, index))
+            .is_some_and(|&cap| would_make > cap);
+        if skip || too_many {
             continue;
         }
 
         // whole batches; pricing them buys ingredients and crafts sub-items, changing the state
-        let batches = item_count.div_ceil(recipe.output_item_count);
-        let output_count = batches * recipe.output_item_count;
         let cost = recipe.currency_cost();
         let cost = cost.filter(|_| opt.include_timegated || !recipe.is_timegated());
         let cost = cost.and_then(|currencies| {

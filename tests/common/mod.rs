@@ -112,6 +112,7 @@ pub fn one_ingredient_game_data(
     GameData {
         recipes: recipes_map,
         items: items_map,
+        unlocked_by: HashMap::new(),
     }
 }
 

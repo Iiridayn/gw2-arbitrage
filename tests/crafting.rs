@@ -14,7 +14,7 @@ use gw2_arbitrage::{
     },
 };
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Recipe making one of `output` from one of each ingredient
 fn recipe<const A: usize>(
@@ -36,11 +36,11 @@ fn recipe<const A: usize>(
 fn groups(item_id: u32, recipes: Vec<Recipe>) -> (Vec<Option<usize>>, Vec<String>) {
     let crafted = CraftedItems {
         crafted: recipes.iter().map(|r| ((r.output_item_id, 0), 1)).collect(),
-        leftovers: HashMap::new(),
+        ..Default::default()
     };
     let recipes_map = GameData::new(recipes, vec![]).recipes;
     let mut steps = crafted.sorted(item_id, &recipes_map);
-    let step_groups = crafting::discipline_groups(&mut steps);
+    let step_groups = crafting::discipline_groups(&mut steps, &crafted.unlocks);
     let labels = crafting::disciplines_labels(&steps, &step_groups);
     (step_groups, labels)
 }
@@ -119,6 +119,7 @@ fn vendor_preferred_over_merchant_recipe_at_equal_cost() {
         &game_data,
         &tp_listings_map(vec![(1000, vec![(100, 1)], vec![])]),
         Some(&mut purchased_ingredients),
+        None,
         &Default::default(),
     )
     .unwrap();
@@ -141,9 +142,29 @@ fn mystic_forge_steps_are_done_in_one_visit() {
         .iter()
         .map(|&id| (id, 1, &recipes[id as usize - 1]))
         .collect();
-    crafting::discipline_groups(&mut steps);
+    crafting::discipline_groups(&mut steps, &Default::default());
     let ids: Vec<_> = steps.iter().map(|step| step.0).collect();
     assert_eq!(ids, [4, 5, 2, 3, 1]);
+}
+
+#[test]
+fn steps_learn_a_recipe_before_using_it() {
+    // item 1's recipe is learned from item 50, made at the Mystic Forge; item 1 takes more, so
+    // it's sorted first
+    let recipes = vec![
+        recipe(1, [Artificer], 400, &[2, 4]),
+        recipe(50, [MysticForge], 0, &[3]),
+    ];
+    let crafted = CraftedItems {
+        crafted: HashMap::from([((1, 0), 1), ((50, 0), 1)]),
+        unlocks: BTreeMap::from([(1, Some((50, Money::from_copper(0))))]),
+        ..Default::default()
+    };
+    let recipes_map = GameData::new(recipes, vec![]).recipes;
+    let mut steps = crafted.sorted(1, &recipes_map);
+    crafting::discipline_groups(&mut steps, &crafted.unlocks);
+    let ids: Vec<_> = steps.iter().map(|step| step.0).collect();
+    assert_eq!(ids, [50, 1]);
 }
 
 #[test]
@@ -214,7 +235,6 @@ fn estimate_takes_the_cheaper_recipe() {
         1,
         &game_data,
         &prices,
-        None,
         &mut vec![],
         &Default::default(),
     );
@@ -225,7 +245,7 @@ fn estimate_takes_the_cheaper_recipe() {
 fn steps_list_each_recipe_of_an_item() {
     let crafted = CraftedItems {
         crafted: HashMap::from([((1, 0), 2), ((2, 0), 1), ((2, 1), 1)]),
-        leftovers: HashMap::new(),
+        ..Default::default()
     };
     let recipes = vec![
         recipe(1, [Artificer], 400, &[2]),

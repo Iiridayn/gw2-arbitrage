@@ -9,11 +9,11 @@ use gw2_arbitrage::{
     custom_recipes,
     item::Item,
     money::Money,
-    profit::{calculate_crafting_profit, ProfitableItem},
+    profit::{calculate_capped_profit, calculate_crafting_profit, ProfitableItem},
     recipe::{Discipline, Recipe},
 };
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 
 #[test]
@@ -96,6 +96,7 @@ fn calculate_crafting_profit_agony_infusion_unprofitable_test() {
         &game_data,
         &tp_listings_map,
         None,
+        None,
         &Default::default(),
     );
     assert!(profitable_item.is_err());
@@ -135,6 +136,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
         &game_data,
         &tp_listings_map,
         Some(&mut purchased_ingredients),
+        None,
         &Default::default(),
     );
 
@@ -196,6 +198,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
                         Vendor
                     )
                 )]),
+                ..Default::default()
             },
         })
     );
@@ -234,6 +237,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
     let mut game_data = GameData {
         recipes: recipes_map,
         items: items_map,
+        unlocked_by: HashMap::new(),
     };
 
     let tp_listings_map = tp_listings_map(vec![
@@ -248,6 +252,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         item_id,
         &game_data,
         &tp_listings_map,
+        None,
         None,
         &Default::default(),
     );
@@ -277,6 +282,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
                         crafting::Source::Crafting
                     )
                 )]),
+                ..Default::default()
             },
         })
     );
@@ -286,6 +292,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         item_id,
         &game_data,
         &tp_listings_map,
+        None,
         None,
         &Default::default(),
     );
@@ -308,7 +315,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             market_seconds: 10 + 12 + 3 + 15,
             crafted_items: CraftedItems {
                 crafted,
-                leftovers: Default::default(),
+                ..Default::default()
             },
         })
     );
@@ -326,6 +333,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
         item_id,
         &game_data,
         &tp_listings_map,
+        None,
         None,
         &Default::default(),
     );
@@ -356,6 +364,7 @@ fn calculate_crafting_profit_with_output_item_count_test() {
                         crafting::Source::Crafting
                     )
                 )]),
+                ..Default::default()
             },
         })
     );
@@ -499,6 +508,7 @@ fn calculate_crafting_profit_unknown_recipe_test() {
     let game_data = GameData {
         recipes: recipes_map,
         items: items_map,
+        unlocked_by: HashMap::new(),
     };
 
     let mut purchased_ingredients = HashMap::new();
@@ -507,6 +517,7 @@ fn calculate_crafting_profit_unknown_recipe_test() {
         &game_data,
         &tp_listings_map(tp_listings),
         Some(&mut purchased_ingredients),
+        None,
         &Default::default(),
     );
 
@@ -580,6 +591,7 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
     let game_data = GameData {
         recipes: recipes_map,
         items: items_map,
+        unlocked_by: HashMap::new(),
     };
 
     let mut purchased_ingredients = HashMap::new();
@@ -588,6 +600,7 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
         &game_data,
         &tp_listings_map,
         Some(&mut purchased_ingredients),
+        None,
         &Default::default(),
     );
     let crafting_cost = Money::from_copper(
@@ -624,7 +637,11 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
             crafting_seconds: 2,
             // 3 ingredients, output, 2 price levels
             market_seconds: 15 + 18 + 3 + 10,
-            crafted_items: CraftedItems { crafted, leftovers },
+            crafted_items: CraftedItems {
+                crafted,
+                leftovers,
+                ..Default::default()
+            },
         })
     );
 }
@@ -638,7 +655,7 @@ fn one_ingredient_profit(
     let game_data = one_ingredient_game_data(1000, 1001, 0);
     let tp_listings_map =
         tp_listings_map(vec![(1001, vec![], ingredient_sells), (1000, buys, vec![])]);
-    calculate_crafting_profit(1000, &game_data, &tp_listings_map, None, opt).ok()
+    calculate_crafting_profit(1000, &game_data, &tp_listings_map, None, None, opt).ok()
 }
 
 #[test]
@@ -709,7 +726,7 @@ fn valued_high(
         ..Default::default()
     };
     let profitable_item =
-        calculate_crafting_profit(item_id, game_data, tp_listings_map, None, &opt).unwrap();
+        calculate_crafting_profit(item_id, game_data, tp_listings_map, None, None, &opt).unwrap();
     assert_eq!(profitable_item.count, count);
     profitable_item
 }
@@ -890,7 +907,7 @@ fn calculate_crafting_profit_buys_at_the_price_listed_before_a_losing_promotion(
         ..Default::default()
     };
     let profitable_item =
-        calculate_crafting_profit(3, &game_data, &tp_listings_map, None, &opt).unwrap();
+        calculate_crafting_profit(3, &game_data, &tp_listings_map, None, None, &opt).unwrap();
     assert_eq!(profitable_item.crafting_cost, Money::from_copper(10));
 }
 
@@ -933,6 +950,123 @@ fn calculate_crafting_profit_buys_sub_ingredient_at_or_below_crafting_cost() {
 fn calculate_crafting_profit_keeps_crafting_cheaper_sub_ingredient_with_vendor_leftovers() {
     assert_eq!(campfire_treat_bowls(33), 80);
     assert_eq!(silk_insignia_patches(601), 20);
+}
+
+/// An item that unlocks `recipe_id`
+fn mock_unlock_item(id: u32, recipe_id: u32) -> Item {
+    let details =
+        format!("{{\"Consumable\": {{\"type\": \"Unlock\", \"recipe_id\": {recipe_id}}}}}");
+    let item = format!(
+        "{{\"id\": {id}, \"name\": \"Recipe\", \"vendor_value\": 0, \"type\": \"Consumable\",
+            \"rarity\": \"Junk\", \"level\": 0, \"flags\": [], \"restrictions\": [],
+            \"details\": {details}}}"
+    );
+    serde_json::from_str(&item).unwrap()
+}
+
+fn ingredient(item_id: u32, count: u32) -> RecipeIngredient {
+    RecipeIngredient { item_id, count }
+}
+
+/// Item 1 by recipe 10, unknown, which item 50 unlocks; then `recipes`
+fn unknown_recipe(ingredients: &[RecipeIngredient], recipes: Vec<Recipe>) -> GameData {
+    let mut recipes = recipes;
+    recipes.insert(0, Recipe::mock(10, 1, 1, [], ingredients, false));
+    GameData::new(recipes, vec![mock_unlock_item(50, 10)])
+}
+
+/// One of item 1, valued high, knowing no recipes
+fn one_valued_high<T>(calculate: impl FnOnce(&HashSet<u32>, &CraftingOptions) -> T) -> T {
+    let opt = CraftingOptions {
+        value: Some(100000),
+        count: Some(1),
+        ..Default::default()
+    };
+    calculate(&HashSet::new(), &opt)
+}
+
+#[test]
+fn calculate_crafting_profit_buys_an_unknown_recipe_with_the_rest() {
+    // the unlock item is made from 5 of 2, bought after the 3 the item takes
+    let sheet = Recipe::mock(20, 50, 1, [Discipline::Merchant], &[ingredient(2, 5)], true);
+    let game_data = unknown_recipe(&[ingredient(2, 3)], vec![sheet]);
+    let tp_listings_map = tp_listings_map(vec![(2, vec![], vec![(100, 3), (200, 1000)])]);
+    let mut purchased = HashMap::new();
+    let item = one_valued_high(|known, opt| {
+        let purchased = Some(&mut purchased);
+        calculate_crafting_profit(1, &game_data, &tp_listings_map, purchased, Some(known), opt)
+    })
+    .unwrap();
+
+    let cost = Money::from_copper(3 * 100 + 5 * 200);
+    assert_eq!(item.crafting_cost, cost);
+    assert_eq!(item.breakeven, cost.trading_post_listing_price());
+    let bought = &purchased[&(2, crafting::Source::TradingPost)];
+    assert_eq!((bought.count, bought.total_cost), (8, cost));
+    let crafted = HashMap::from([((1, 0), 1), ((50, 0), 1)]);
+    assert_eq!(item.crafted_items.crafted, crafted);
+    let unlocks = BTreeMap::from([(10, Some((50, Money::from_copper(1000))))]);
+    assert_eq!(item.crafted_items.unlocks, unlocks);
+}
+
+#[test]
+fn calculate_crafting_profit_crafts_an_unlock_item_below_its_listings() {
+    // the unlock item is 600 listed, or 5 of 2, each 200 listed or made from a 5, listed at 250
+    // but made from a 3 at 10; crafting 2 can only win if 5's lower bound comes from its recipe
+    let sheet = Recipe::mock(20, 50, 1, [Discipline::Merchant], &[ingredient(2, 5)], true);
+    let part = Recipe::mock(21, 2, 1, [], &[ingredient(5, 1)], true);
+    let sub_part = Recipe::mock(22, 5, 1, [], &[ingredient(3, 1)], true);
+    let game_data = unknown_recipe(&[ingredient(4, 1)], vec![sheet, part, sub_part]);
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(200, 1000)]),
+        (3, vec![], vec![(10, 1000)]),
+        (4, vec![], vec![(100, 1000)]),
+        (5, vec![], vec![(250, 1000)]),
+        (50, vec![], vec![(600, 1)]),
+    ]);
+    let item = one_valued_high(|known, opt| {
+        calculate_crafting_profit(1, &game_data, &tp_listings_map, None, Some(known), opt)
+    })
+    .unwrap();
+    let unlocks = BTreeMap::from([(10, Some((50, Money::from_copper(50))))]);
+    assert_eq!(item.crafted_items.unlocks, unlocks);
+}
+
+/// The recipes one of item 1 is crafted by, valued high
+fn capped_crafted(
+    game_data: &GameData,
+    tp_listings_map: &HashMap<u32, ItemListings>,
+) -> HashMap<(u32, usize), u32> {
+    let item = one_valued_high(|known, opt| {
+        calculate_capped_profit(1, game_data, tp_listings_map, None, Some(known), opt)
+    });
+    item.unwrap().crafted_items.crafted
+}
+
+#[test]
+fn calculate_capped_profit_bans_an_unknown_recipe_whose_unlock_costs_more_than_it_saves() {
+    // recipe 0 (id 10) saves 20, but needs unlock item 50, costing 500
+    let known = Recipe::mock(11, 1, 1, [], &[ingredient(3, 1)], true);
+    let game_data = unknown_recipe(&[ingredient(2, 1)], vec![known]);
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(80, 1000)]),
+        (3, vec![], vec![(100, 1000)]),
+        (50, vec![], vec![(500, 1)]),
+    ]);
+    let crafted = capped_crafted(&game_data, &tp_listings_map);
+    assert_eq!(crafted, HashMap::from([((1, 1), 1)]));
+}
+
+#[test]
+fn calculate_capped_profit_buys_rather_than_craft_a_batch_whose_leftovers_lose_money() {
+    // 10 of 2 are made from a 3 at 100, so 9 are left over, with no buy orders to sell them to
+    let game_data = mock_game_data(&[], &[(1, 1, &[(2, 1)]), (2, 10, &[(3, 1)])]);
+    let tp_listings_map = tp_listings_map(vec![
+        (2, vec![], vec![(50, 1000)]),
+        (3, vec![], vec![(100, 1000)]),
+    ]);
+    let crafted = capped_crafted(&game_data, &tp_listings_map);
+    assert_eq!(crafted, HashMap::from([((1, 0), 1)]));
 }
 
 mod data {
@@ -1075,6 +1209,7 @@ mod data {
             game_data: GameData {
                 recipes: recipes_map,
                 items: items_map,
+                unlocked_by: HashMap::new(),
             },
             tp_listings_map,
         }

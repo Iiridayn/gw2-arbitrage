@@ -1,5 +1,5 @@
 use num_rational::Rational32;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::Read;
@@ -21,13 +21,14 @@ use crate::recipe::Discipline;
 
 pub const CACHE_PREFIX: &str = "cache_";
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CraftingOptions {
     pub include_timegated: bool,
     pub count: Option<u32>,
     pub min_per_item: Option<u32>,
     pub min_per_hour: Option<u32>,
     pub value: Option<u32>,
+    pub caps: HashMap<(u32, usize), u32>, // (id, recipe index), most it may make
 }
 
 #[derive(Default)]

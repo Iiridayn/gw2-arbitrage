@@ -3,7 +3,7 @@ use crate::custom_recipes;
 use crate::money::Money;
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,8 @@ use strum::{Display, EnumString, EnumVariantNames};
 const RECIPE_SWITCH_SECONDS: f64 = 1.0;
 /// Finding an ingredient on the TP or at a vendor and typing the quantity
 pub const INGREDIENT_SWITCH_SECONDS: f64 = 6.0;
+/// Recipes that can no longer be learned: Wooden Sword, Asuran Harpoon
+pub const UNLEARNABLE_RECIPES: [u32; 2] = [5424, 6057];
 
 #[derive(
     Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Display, EnumString, EnumVariantNames,
@@ -232,6 +234,12 @@ impl Recipe {
         }
     }
 
+    /// The recipe's id, if the account doesn't know it
+    pub fn filter_unknown_id(&self, known_recipes: &HashSet<u32>) -> Option<u32> {
+        self.id
+            .filter(|id| !self.is_automatic() && !known_recipes.contains(id))
+    }
+
     pub fn sorted_ingredients(&self) -> Vec<&api::RecipeIngredient> {
         let mut ingredients: Vec<&api::RecipeIngredient> = self.ingredients.iter().collect();
         ingredients.sort_unstable_by(|a, b| match b.count.cmp(&a.count) {
@@ -247,21 +255,5 @@ impl Recipe {
             && self.disciplines == other.disciplines
             && self.sorted_ingredients() == other.sorted_ingredients()
             && self.currencies == other.currencies
-    }
-}
-
-/// Add the ids of everything that can go into `item_id`, by any of its recipes
-pub fn collect_ingredient_ids(
-    item_id: u32,
-    recipes_map: &HashMap<u32, Vec<Recipe>>,
-    ids: &mut Vec<u32>,
-) {
-    let recipes = recipes_map.get(&item_id).into_iter().flatten();
-    for ingredient in recipes.flat_map(|recipe| &recipe.ingredients) {
-        if ids.contains(&ingredient.item_id) {
-            continue;
-        }
-        ids.push(ingredient.item_id);
-        collect_ingredient_ids(ingredient.item_id, recipes_map, ids);
     }
 }
