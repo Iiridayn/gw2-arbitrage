@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::recipe;
 use crate::request;
 
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::str::FromStr;
 
@@ -37,25 +38,8 @@ static BLACKLIST_ITEM_IDS: phf::Set<u32> = phf_set! {
     // Leaving in; at least lists the minimum accurately.
     // 68063_u32, // Amalgamated Gemstone; 10% chance of 25 from the 10 recipe, etc.
 
-    // Vendor purchases using items _and currency_; currency is ignored.
-    // I think most aren't a problem as outputs typically cannot be sold
-    24_u32, // Sealed Package of Snowballs; 1 Snowflake, yes, but +7k karma
-    // Swim Speed Infusions: +448 copper per level per conversion (fewer conversions is better)
-    87518_u32, // Swim-Speed Infusion +11
-    87493_u32, // Swim-Speed Infusion +12
-    87503_u32, // Swim-Speed Infusion +13
-    87526_u32, // Swim-Speed Infusion +14
-    87496_u32, // Swim-Speed Infusion +15
-    87497_u32, // Swim-Speed Infusion +16
-    87508_u32, // Swim-Speed Infusion +17
-    87516_u32, // Swim-Speed Infusion +18
-    87532_u32, // Swim-Speed Infusion +19
-    87495_u32, // Swim-Speed Infusion +20
-    87525_u32, // Swim-Speed Infusion +21
-    87511_u32, // Swim-Speed Infusion +22
-    87512_u32, // Swim-Speed Infusion +23
-    87527_u32, // Swim-Speed Infusion +24
-    87502_u32, // Swim-Speed Infusion +25
+    24_u32, // Sealed Package of Snowballs; Wintersday only
+    87544_u32, // Swim-Speed Infusion +30; its lower bound overflows i32
 
     // Purchase restrictions the API doesn't expose:
     82376_u32, // Zunja's Necklace; once per account
@@ -84,6 +68,10 @@ pub enum Ingredient {
 
 #[derive(Debug, Deserialize)]
 pub struct Recipe {
+    #[serde(default)]
+    pub id: Option<u32>,
+    #[serde(default)]
+    pub source: Option<recipe::RecipeSource>,
     pub name: String, // used only in error output
     #[serde(deserialize_with = "real_item_id")]
     pub output_item_id: u32,
@@ -105,9 +93,13 @@ pub async fn fetch_custom_recipes(
     let custom_recipes: Vec<Recipe> =
         request::fetch(url, notify, request::LARGE_DOWNLOAD_TIMEOUT).await?;
 
+    let additional = additional_recipes()?;
+    // ours replace Peureki's for the same item, to correct them
+    let replaced: HashSet<u32> = additional.iter().map(|r| r.output_item_id).collect();
     let recipes: Vec<recipe::Recipe> = custom_recipes
         .into_iter()
-        .chain(additional_recipes()?)
+        .filter(|r| !replaced.contains(&r.output_item_id))
+        .chain(additional)
         // Remove blacklisted recipes here to avoid printing errors for non-integers
         .filter(|r| !BLACKLIST_ITEM_IDS.contains(&r.output_item_id))
         .map(std::convert::TryFrom::try_from)

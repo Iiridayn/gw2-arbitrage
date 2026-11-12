@@ -126,12 +126,14 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
                 recipe.name
             ));
         };
-        // Any disciplines _except_ Achievement can be counted as known
+        // Unless the file gives a source, any disciplines _except_ Achievement can be counted as known
         // While some regular discipline precursor recipes must be learned, the
         // outputs appear to be account bound anyway, so won't be on TP.
         // There are some useful Scribe WvW BPs in the data, so ignoring all
         // normal discipline recipes would catch those too.
-        let source = if recipe.disciplines.contains(&Discipline::Achievement) {
+        let source = if let Some(source) = recipe.source {
+            source
+        } else if recipe.disciplines.contains(&Discipline::Achievement) {
             RecipeSource::Achievement
         } else {
             RecipeSource::Automatic
@@ -152,7 +154,7 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
             }
         }
         Ok(Recipe {
-            id: None,
+            id: recipe.id,
             output_item_id: recipe.output_item_id,
             output_item_count,
             disciplines: recipe.disciplines,
