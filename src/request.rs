@@ -284,16 +284,34 @@ where
     Ok(result)
 }
 
+/// The recipes the account knows; none without an API key. A snapshot keeps the ones it was first
+/// made with, without the key, so learning more doesn't change it
 pub async fn fetch_account_recipes(
-    key: &str,
+    key: Option<&str>,
     cache_dir: &Path,
     notify: Option<&dyn Fn(&str)>,
 ) -> Result<HashSet<u32>, Box<dyn std::error::Error>> {
+    let snapshot = CONFIG
+        .snapshot_dir
+        .as_ref()
+        .map(|dir| dir.join("recipes.bin"));
+    if let Some(file) = snapshot.as_ref().and_then(|path| File::open(path).ok()) {
+        return Ok(deserialize_from(DeflateDecoder::new(file))?);
+    }
+    let Some(key) = key else {
+        return Ok(HashSet::new());
+    };
     let url = format!(
         "https://api.guildwars2.com/v2/account/recipes?access_token={}",
         key
     );
-    cached_fetch(&url, cache_dir, notify).await
+    let recipes = cached_fetch(&url, cache_dir, notify).await?;
+    if let Some(path) = snapshot {
+        let file = File::create(path)?;
+        let stream = BufWriter::new(DeflateEncoder::new(file, Compression::default()));
+        serialize_into(stream, &recipes)?;
+    }
+    Ok(recipes)
 }
 
 /// Mask the API key, which is always the last query parameter

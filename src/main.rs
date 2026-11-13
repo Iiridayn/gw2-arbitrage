@@ -15,17 +15,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notify_print = |url: &str| println!("Fetching {}", url);
     let notify = Some(&notify_print as &dyn Fn(&str));
 
-    // Without an API key, assume we know none
-    let known_recipes = if let Some(key) = &CONFIG.api_key {
-        request::fetch_account_recipes(key, &CONFIG.cache_dir, notify)
-            .await
-            .unwrap_or_else(|error| {
-                eprintln!("API error fetching recipe unlocks: {}", error);
-                HashSet::new()
-            })
-    } else {
-        HashSet::new()
-    };
+    let api_key = CONFIG.api_key.as_deref();
+    let known_recipes = request::fetch_account_recipes(api_key, &CONFIG.cache_dir, notify)
+        .await
+        .unwrap_or_else(|error| {
+            eprintln!("API error fetching recipe unlocks: {}", error);
+            HashSet::new()
+        });
 
     let mut stage = Instant::now();
     println!("Loading recipes");

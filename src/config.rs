@@ -302,9 +302,9 @@ struct Opt {
     #[structopt(long, parse(from_os_str), help = &CACHE_DIR_HELP)]
     cache_dir: Option<PathBuf>,
 
-    /// Keep trading post prices and listings in this directory and reuse them on later runs, never
-    /// refreshing them; listings not yet in it are fetched and added. For profiling and testing
-    /// against a fixed market
+    /// Keep trading post prices and listings, and the account's known recipes, in this directory
+    /// and reuse them on later runs, never refreshing them; listings not yet in it are fetched and
+    /// added. For profiling and testing against a fixed market
     #[structopt(long, parse(from_os_str))]
     snapshot: Option<PathBuf>,
 
