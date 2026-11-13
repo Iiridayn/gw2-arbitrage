@@ -16,56 +16,48 @@ const SALE_COOLDOWN_SECONDS: f64 = 8.0;
 /// Opening the TP on the output from the inventory
 const OUTPUT_SWITCH_SECONDS: f64 = 3.0;
 
+/// An output's sale transactions, how many are sold, and its recipes and batches crafted
+pub type Output<'a> = (u32, u32, Vec<(&'a Recipe, u32)>);
+
 /// Seconds spent buying and selling. One transaction per stack bought of each TP ingredient, and
 /// per stack sold into each price level, since a sale can't span prices. Sales are made while the
 /// output crafts, except at crafting stations, where a stack can't be sold until it's complete.
 pub fn market_seconds(
     tp_purchases: &HashMap<u32, u32>,
     vendor_purchases: usize,
-    buy_order_quantities: &[u32],
-    sold: u32,
-    fixed_value: bool,
-    output: &[(&Recipe, u32)], // its recipes and batches crafted
+    outputs: &[Output],
 ) -> u32 {
     let buys: u32 = tp_purchases
         .values()
         .map(|count| count.div_ceil(ITEM_STACK_SIZE))
         .sum();
-    let sales: u32 = if fixed_value {
-        sold.div_ceil(ITEM_STACK_SIZE)
-    } else {
-        // buys are sorted in ascending price
-        let mut unsold = sold;
-        buy_order_quantities
+    // the cooldown counts the sales of every output
+    let pace = |sales: u32| {
+        sales.min(SALES_BEFORE_COOLDOWN) as f64 * TP_ACTION_SECONDS
+            + sales.saturating_sub(SALES_BEFORE_COOLDOWN) as f64 * SALE_COOLDOWN_SECONDS
+    };
+    let mut sales_before = 0;
+    let mut seconds = buys as f64 * TP_ACTION_SECONDS
+        + (tp_purchases.len() + vendor_purchases) as f64 * INGREDIENT_SWITCH_SECONDS;
+    for &(sales, sold, ref output) in outputs.iter().filter(|(_, sold, _)| *sold > 0) {
+        let selling = pace(sales_before + sales) - pace(sales_before);
+        sales_before += sales;
+        let output_crafting: f64 = output
             .iter()
-            .rev()
-            .map(|&quantity| {
-                let sold_at_price = quantity.min(unsold);
-                unsold -= sold_at_price;
-                sold_at_price.div_ceil(ITEM_STACK_SIZE)
-            })
-            .sum()
-    };
-    let selling = sales.min(SALES_BEFORE_COOLDOWN) as f64 * TP_ACTION_SECONDS
-        + sales.saturating_sub(SALES_BEFORE_COOLDOWN) as f64 * SALE_COOLDOWN_SECONDS;
-    let output_crafting: f64 = output
-        .iter()
-        .map(|&(recipe, batches)| recipe.crafting_seconds(batches))
-        .sum();
-    // the Mystic Forge crafts one at a time, so only the last sale must wait
-    let forged = output
-        .iter()
-        .all(|(recipe, _)| recipe.disciplines.contains(&MysticForge));
-    let selling_after_crafting = if forged {
-        TP_ACTION_SECONDS
-    } else {
-        let last_stack = (sold - 1) % ITEM_STACK_SIZE + 1;
-        selling * last_stack as f64 / sold as f64
-    };
-    let seconds = buys as f64 * TP_ACTION_SECONDS
-        + (tp_purchases.len() + vendor_purchases) as f64 * INGREDIENT_SWITCH_SECONDS
-        + OUTPUT_SWITCH_SECONDS
-        + (selling - output_crafting).max(selling_after_crafting);
+            .map(|&(recipe, batches)| recipe.crafting_seconds(batches))
+            .sum();
+        // the Mystic Forge crafts one at a time, so only the last sale must wait
+        let forged = output
+            .iter()
+            .all(|(recipe, _)| recipe.disciplines.contains(&MysticForge));
+        let selling_after_crafting = if forged {
+            TP_ACTION_SECONDS
+        } else {
+            let last_stack = (sold - 1) % ITEM_STACK_SIZE + 1;
+            selling * last_stack as f64 / sold as f64
+        };
+        seconds += OUTPUT_SWITCH_SECONDS + (selling - output_crafting).max(selling_after_crafting);
+    }
     seconds.round() as u32
 }
 
@@ -112,8 +104,8 @@ impl ItemListings {
         Some((cost, min_sell, max_sell))
     }
 
-    pub fn sell(&mut self, mut count: u32) -> Option<(Money, u32)> {
-        let mut revenue = Money::zero();
+    /// Fills the highest buy orders; returns the lowest price filled
+    pub fn sell(&mut self, mut count: u32) -> Option<u32> {
         let mut min_buy = 0;
 
         while count > 0 {
@@ -122,8 +114,6 @@ impl ItemListings {
                 listing.quantity -= 1;
                 count -= 1;
                 min_buy = listing.unit_price;
-                revenue +=
-                    Money::from_copper(listing.unit_price as i32).trading_post_sale_revenue();
                 listing.quantity.is_zero()
             } else {
                 return None;
@@ -134,20 +124,30 @@ impl ItemListings {
             }
         }
 
-        Some((revenue, min_buy))
+        Some(min_buy)
     }
 
-    /// Revenue from selling up to `count` into buy orders, best price first, without selling
-    pub fn sale_revenue(&self, mut count: u32) -> Money {
-        let mut revenue = Money::zero();
+    /// The totals of the transactions selling up to `count` into buy orders, best price first,
+    /// without selling; a transaction is at most a stack at one price
+    pub fn sale_transactions(&self, mut count: u32) -> Vec<Money> {
+        let mut transactions = vec![];
         // buys are sorted in ascending price
         for listing in self.buys.iter().rev() {
-            let sold = listing.quantity.min(count);
-            revenue +=
-                Money::from_copper(listing.unit_price as i32).trading_post_sale_revenue() * sold;
+            let mut sold = listing.quantity.min(count);
             count -= sold;
+            while sold > 0 {
+                let stack = sold.min(ITEM_STACK_SIZE);
+                transactions.push(Money::from_copper((stack * listing.unit_price) as i32));
+                sold -= stack;
+            }
         }
-        revenue
+        transactions
+    }
+
+    /// Revenue from selling up to `count` into buy orders, after the fees on each transaction
+    pub fn sale_revenue(&self, count: u32) -> Money {
+        let transactions = self.sale_transactions(count).into_iter();
+        transactions.map(Money::trading_post_sale_revenue).sum()
     }
 
     /// Quantity left at the lowest sell price, after pending buys

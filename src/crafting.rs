@@ -76,6 +76,11 @@ impl GameData {
         }
         ids.into_iter().collect()
     }
+
+    pub fn item_name(&self, id: u32) -> String {
+        let item = self.items.get(&id);
+        item.map_or_else(|| "???".to_string(), |item| item.to_string())
+    }
 }
 
 pub struct SummaryPrices {
@@ -289,7 +294,11 @@ impl CraftedItems {
     }
 
     /// Estimated seconds to craft everything, with one batch per crafted item
-    pub fn crafting_seconds(&self, item_id: u32, recipes_map: &HashMap<u32, Vec<Recipe>>) -> f64 {
+    pub fn crafting_seconds(
+        &self,
+        item_ids: &[u32],
+        recipes_map: &HashMap<u32, Vec<Recipe>>,
+    ) -> f64 {
         let crafting: f64 = self
             .crafted
             .iter()
@@ -298,7 +307,7 @@ impl CraftedItems {
                 recipe.crafting_seconds(count / recipe.output_item_count)
             })
             .sum();
-        let step_groups = discipline_groups(&mut self.sorted(item_id, recipes_map), &self.unlocks);
+        let step_groups = discipline_groups(&mut self.sorted(item_ids, recipes_map), self);
         let groups: Vec<usize> = step_groups.into_iter().flatten().collect();
         let switches = groups.windows(2).filter(|w| w[0] != w[1]).count();
         crafting + switches as f64 * CHARACTER_SWITCH_SECONDS
@@ -315,6 +324,11 @@ impl CraftedItems {
             unknown_recipes.extend(recipe.filter_unknown_id(known_recipes));
         }
         unknown_recipes
+    }
+
+    /// The unlock item obtained to learn `recipe`, and its cost
+    pub fn unlock(&self, recipe: &Recipe) -> Option<(u32, Money)> {
+        *self.unlocks.get(&recipe.id?)?
     }
 
     /// Sort the steps making `item_ids`, by each recipe used, in the order which will remove
@@ -360,8 +374,8 @@ impl CraftedItems {
         (sum, sorted)
     }
 
-    /// The steps under crafting `count` of an item by one of its recipes, then that step; also
-    /// returns the items they consume
+    /// The steps under crafting `count` of an item by one of its recipes, crafting the item that
+    /// teaches it included, then that step; also returns the items they consume
     fn sort_steps<'a>(
         &self,
         (item_id, index): (u32, usize),
@@ -371,7 +385,12 @@ impl CraftedItems {
     ) -> (u32, Vec<(u32, u32, &'a Recipe)>) {
         let recipe = &recipes_map[&item_id][index];
         being_crafted.push(item_id);
-        let ingredient_ids = recipe.ingredients.iter().map(|i| i.item_id);
+        let unlock_id = self.unlock(recipe).map(|(unlock_id, _)| unlock_id);
+        let ingredient_ids = recipe
+            .ingredients
+            .iter()
+            .map(|i| i.item_id)
+            .chain(unlock_id);
         let (sum, mut sorted) = self.sort_ingredients(ingredient_ids, recipes_map, being_crafted);
         being_crafted.pop();
 
@@ -383,12 +402,11 @@ impl CraftedItems {
     // TODO: use an iterator? - complains about lifetimes though, despite copy data output w/o references
     pub fn sorted<'a>(
         &self,
-        item_id: u32,
+        item_ids: &[u32],
         recipes_map: &'a HashMap<u32, Vec<Recipe>>,
     ) -> Vec<(u32, u32, &'a Recipe)> {
-        let unlock_ids = self.unlocks.values().flatten().map(|&(id, _)| id);
-        let item_ids = std::iter::once(item_id).chain(unlock_ids);
-        self.sort_ingredients(item_ids, recipes_map, &mut vec![]).1
+        self.sort_ingredients(item_ids.iter().copied(), recipes_map, &mut vec![])
+            .1
     }
 }
 
@@ -397,7 +415,7 @@ impl CraftedItems {
 /// group index; None for steps not at a station (salvage, double click, …).
 pub fn discipline_groups(
     steps: &mut Vec<(u32, u32, &Recipe)>,
-    unlocks: &RecipeUnlocks,
+    items: &CraftedItems,
 ) -> Vec<Option<usize>> {
     let disciplines = |recipe: &Recipe| -> Vec<Discipline> {
         let crafting = recipe.disciplines.iter().copied();
@@ -433,7 +451,7 @@ pub fn discipline_groups(
         let used = |i: usize| {
             let output = steps[i].0;
             let learns = |recipe: &Recipe| {
-                let unlock = recipe.id.and_then(|id| *unlocks.get(&id)?);
+                let unlock = items.unlock(recipe);
                 unlock.is_some_and(|(unlock_id, _)| unlock_id == output)
             };
             let uses = |&j: &usize| {

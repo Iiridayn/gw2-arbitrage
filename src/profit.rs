@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::api;
 use crate::config;
 use crate::crafting;
+use crate::item::ITEM_STACK_SIZE;
 use crate::money::Money;
 use crate::request;
 use crate::trading_post::{market_seconds, ItemListings};
@@ -93,7 +94,7 @@ pub fn profitable_item_list(
             }
 
             calculate_capped_profit(
-                *item_id,
+                &[*item_id],
                 game_data,
                 &tp_listings_map_for_item,
                 None,
@@ -105,7 +106,7 @@ pub fn profitable_item_list(
         })
         .collect();
 
-    profitable_items.sort_unstable_by_key(|item| item.id);
+    profitable_items.sort_unstable_by_key(|item| item.sales[0].id);
     match CONFIG.sort {
         config::SortBy::Total => profitable_items.sort_by_key(|item| item.profit),
         config::SortBy::Hour => profitable_items.sort_by_cached_key(|item| item.profit_per_hour()),
@@ -119,7 +120,7 @@ pub fn profitable_item_list(
 }
 
 pub async fn calc_item_profit(
-    item_id: u32,
+    item_ids: &[u32],
     game_data: &crafting::GameData,
     known_recipes: &HashSet<u32>,
     notify: Option<&dyn Fn(&str)>,
@@ -131,8 +132,12 @@ pub async fn calc_item_profit(
     ),
     Box<dyn std::error::Error>,
 > {
-    let mut request_listing_item_ids = game_data.collect_tree_ids(item_id, Some(known_recipes));
+    let mut request_listing_item_ids: Vec<u32> = item_ids
+        .iter()
+        .flat_map(|&id| game_data.collect_tree_ids(id, Some(known_recipes)))
+        .collect();
     request_listing_item_ids.sort_unstable();
+    request_listing_item_ids.dedup();
 
     let tp_listings =
         request::fetch_item_listings(&request_listing_item_ids, Some(&CONFIG.cache_dir), notify)
@@ -141,7 +146,7 @@ pub async fn calc_item_profit(
 
     let mut purchased_ingredients = Default::default();
     let profitable_item = calculate_capped_profit(
-        item_id,
+        item_ids,
         game_data,
         &tp_listings_map,
         Some(&mut purchased_ingredients),
@@ -177,7 +182,7 @@ fn is_worth_crafting(item: &ProfitableItem) -> bool {
 /// first. A cap either bans the recipes an unlock item teaches, to save buying it, or limits a
 /// recipe to the batches the plan uses, to save the loss on its leftovers.
 pub fn calculate_capped_profit(
-    item_id: u32,
+    item_ids: &[u32],
     game_data: &crafting::GameData,
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     purchased_ingredients: Option<
@@ -194,7 +199,7 @@ pub fn calculate_capped_profit(
     // scored as the profit loop scores counts
     let plan = |opt: &config::CraftingOptions| -> Result<(ProfitableItem, f64), String> {
         let item = calculate_crafting_profit(
-            item_id,
+            item_ids,
             game_data,
             tp_listings_map,
             None,
@@ -217,9 +222,7 @@ pub fn calculate_capped_profit(
         let mut candidates = vec![];
         for (&(id, index), &count) in &item.crafted_items.crafted {
             let recipe = &game_data.recipes[&id][index];
-            let unlocks = &item.crafted_items.unlocks;
-            let unlock = recipe.id.and_then(|recipe_id| *unlocks.get(&recipe_id)?);
-            if let Some((unlock_id, unlock_cost)) = unlock {
+            if let Some((unlock_id, unlock_cost)) = item.crafted_items.unlock(recipe) {
                 let entry = bans_by_unlock_item.entry(unlock_id);
                 let (_, bans) = entry.or_insert((unlock_cost, vec![]));
                 bans.push(((id, index), BAN));
@@ -258,7 +261,7 @@ pub fn calculate_capped_profit(
 
     if purchased_ingredients.is_some() {
         calculate_crafting_profit(
-            item_id,
+            item_ids,
             game_data,
             tp_listings_map,
             purchased_ingredients,
@@ -269,8 +272,10 @@ pub fn calculate_capped_profit(
     Ok(best)
 }
 
+/// Craft `item_ids` together from one market, each unit made of whichever item profits most from
+/// one more, until none does
 pub fn calculate_crafting_profit(
-    item_id: u32,
+    item_ids: &[u32],
     game_data: &crafting::GameData,
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     mut purchased_ingredients: Option<
@@ -280,17 +285,20 @@ pub fn calculate_crafting_profit(
     opt: &config::CraftingOptions,
 ) -> Result<ProfitableItem, String> {
     let api_listings_map = tp_listings_map;
-    let buy_order_quantities: Vec<u32> = tp_listings_map.get(&item_id).map_or_else(Vec::new, |l| {
-        l.buys.iter().map(|listing| listing.quantity).collect()
-    });
-
     let mut tp_listings_map: BTreeMap<u32, ItemListings> = tp_listings_map
         .clone()
         .into_iter()
         .map(|(id, listings)| (id, ItemListings::from(listings)))
         .collect();
+    // before any are sold, as each item's sales fill its buy orders in shared transactions
+    let unsold = tp_listings_map.clone();
 
-    let ids = game_data.collect_tree_ids(item_id, known_recipes);
+    let mut ids: Vec<u32> = item_ids
+        .iter()
+        .flat_map(|&id| game_data.collect_tree_ids(id, known_recipes))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
     let lowest_sells = tp_listings_map.iter().filter_map(|(&id, listings)| {
         Some((
             id,
@@ -298,126 +306,189 @@ pub fn calculate_crafting_profit(
         ))
     });
     let lower_bounds = crafting::lower_bounds(lowest_sells.collect(), ids.into_iter(), game_data);
-    let output = |items: &crafting::CraftedItems| {
-        let crafted = items.crafted.iter().filter(|((id, _), _)| *id == item_id);
-        let output = crafted.map(|(&(id, index), &count)| {
-            let recipe = &game_data.recipes[&id][index];
-            (recipe, count / recipe.output_item_count)
+    // each item's sale transactions, count sold, and recipes and batches crafted, for market time
+    let outputs = |items: &crafting::CraftedItems, sales: &[Sale]| -> Vec<_> {
+        let outputs = sales.iter().map(|sale| {
+            let transactions = match opt.value {
+                Some(_) => sale.count.div_ceil(ITEM_STACK_SIZE),
+                None => unsold.get(&sale.id).map_or(0, |listings| {
+                    listings.sale_transactions(sale.count).len() as u32
+                }),
+            };
+            let crafted = items.crafted.iter().filter(|((id, _), _)| *id == sale.id);
+            let batches = crafted.map(|(&(id, index), &count)| {
+                let recipe = &game_data.recipes[&id][index];
+                (recipe, count / recipe.output_item_count)
+            });
+            (transactions, sale.count, batches.collect())
         });
-        output.collect::<Vec<_>>()
+        outputs.collect()
+    };
+    // what one more adds to the sales after fees, and the buy order it fills
+    let sale_price = |listings: &BTreeMap<u32, ItemListings>, sale: &Sale| match opt.value {
+        Some(price) => Some((Money::from_copper(price as i32), price)),
+        None => {
+            let top = listings.get(&sale.id)?.buys.last()?;
+            let revenue = |count| unsold[&sale.id].sale_revenue(count);
+            Some((
+                revenue(sale.count + 1) - revenue(sale.count),
+                top.unit_price,
+            ))
+        }
     };
     let min_profit = Money::from_copper(opt.min_per_item.unwrap_or(0) as i32);
 
-    let mut listing_profit = Money::zero();
     let mut total_crafting_cost = Money::zero();
     let mut crafting_count: u32 = 0;
     let mut crafted_items = crafting::CraftedItems::default();
     let mut lots = HashMap::new();
     let mut tp_purchases: HashMap<u32, u32> = HashMap::new();
     let mut vendor_purchases: HashSet<u32> = HashSet::new();
-    let mut best_score = 0.0;
-    let mut best_count = 0;
+    let mut score = 0.0; // of the plan so far
+                         // each item's share of the score: (running total, its peak, count at the peak)
+    let mut gains = vec![(0.0, 0.0, 0); item_ids.len()];
+    let mut floors = vec![None; item_ids.len()]; // each item's crafting cost when last priced
 
-    let mut min_sell = 0;
-    let max_sell = tp_listings_map.get(&item_id).map_or_else(
-        || opt.value.unwrap_or(0),
-        |listings| listings.buys.last().map_or(0, |l| l.unit_price),
-    );
-    let mut breakeven = Money::zero();
-    // why the loop stopped
-    let stop: String;
+    // breakeven is the last unit's crafting cost, the minimum to recoup it
+    let mut sales: Vec<Sale> = item_ids
+        .iter()
+        .map(|&id| {
+            let max_sell = tp_listings_map.get(&id).map_or_else(
+                || opt.value.unwrap_or(0),
+                |listings| listings.buys.last().map_or(0, |l| l.unit_price),
+            );
+            Sale {
+                id,
+                max_sell: Money::from_copper(max_sell as i32),
+                ..Default::default()
+            }
+        })
+        .collect();
 
-    // simulate crafting 1 item per loop iteration until it becomes unprofitable; the rest of a
-    // batch is taken from leftovers
+    // simulate crafting 1 item per loop iteration, of whichever profits most, until none does;
+    // the rest of a batch is taken from leftovers
     loop {
-        if opt.count.is_some_and(|count| crafting_count >= count) {
-            stop = "Reached --count".to_string();
-            break;
-        }
-
-        let mut context = crafting::PreciseCraftingCostContext {
-            purchases: vec![],
-            items: crafted_items.clone(),
-            being_crafted: vec![],
-            lots: lots.clone(),
-            seconds: 0.0,
-        };
-
-        let crafting_cost = match crafting::calculate_precise_min_crafting_cost(
-            item_id,
-            1,
-            game_data,
-            &mut tp_listings_map,
-            &lower_bounds,
-            &mut context,
-            opt,
-        ) {
-            Some(crafting::PreciseCraftingCost {
-                source: crafting::Source::Crafting,
-                cost,
-                ..
-            }) => cost,
-            Some(crafting::PreciseCraftingCost {
-                cost,
-                source,
-                crafting: Some(crafting),
-            }) => {
-                stop = format!(
-                    "Cheaper to buy {} ({} each) than to craft ({} each)",
-                    if source == crafting::Source::Vendor {
-                        "from a vendor"
-                    } else {
-                        "on the TP"
-                    },
-                    cost,
-                    crafting
-                );
-                break;
+        // (profit, index, crafting cost, buy order filled, state)
+        let mut best: Option<(Money, usize, Money, u32, _)> = None;
+        // each item is priced again each round, as what another made may have changed its costs
+        for (index, &item_id) in item_ids.iter().enumerate() {
+            let made = sales[index].count;
+            if opt.count.is_some_and(|count| made >= count) {
+                sales[index].stop = "Reached --count".to_string();
+                continue;
             }
-            _ => {
-                stop = "An ingredient can't be bought or crafted".to_string();
-                break;
+            if opt.item_caps.get(&item_id).is_some_and(|&cap| made >= cap) {
+                sales[index].stop = "More don't pay after leftovers or --min-per-hour".to_string();
+                continue;
             }
-        };
-
-        let (buy_price, min_buy) = if let Some(price) = opt.value {
-            (Money::from_copper(price as i32), price)
-        } else if let Some((buy_price, min_buy)) = tp_listings_map
-            .get_mut(&item_id)
-            .unwrap_or_else(|| panic!("Missing listings for item id: {}", item_id))
-            .sell(1)
-        {
-            (buy_price, min_buy)
-        } else {
-            stop = "Not enough buy orders".to_string();
-            break;
-        };
-
-        // Ensure buy_price is larger before subtracting cost for profit
-        if buy_price < crafting_cost + min_profit {
-            stop = format!(
-                "Crafting costs {} each, {} ({} each)",
-                crafting_cost,
-                if buy_price < crafting_cost {
+            if !game_data.recipes.contains_key(&item_id) {
+                sales[index].stop = "No usable recipe; check -m, -u and the blacklists".to_string();
+                continue;
+            }
+            let Some((buy_price, min_buy)) = sale_price(&tp_listings_map, &sales[index]) else {
+                sales[index].stop =
+                    "No buy orders on the trading post; pass --value to price it".to_string();
+                continue;
+            };
+            let unpaid = |cost: Money| {
+                let why = if buy_price < cost {
                     "more than it sells for"
                 } else {
                     "too close to its sale price for --min-per-item"
-                },
-                buy_price
-            );
-            break;
-        }
+                };
+                let stop = format!("Crafting costs {} each, {} ({} each)", cost, why, buy_price);
+                (buy_price < cost + min_profit).then_some(stop)
+            };
+            let wins = |cost: Money| best.as_ref().is_none_or(|best| buy_price - cost > best.0);
+            // costs only rise, so one that can't pay or win at its last cost isn't priced again
+            if let Some(stop) = floors[index].and_then(unpaid) {
+                sales[index].stop = stop;
+                continue;
+            }
+            if floors[index].is_some_and(|floor| !wins(floor)) {
+                continue;
+            }
 
-        listing_profit += buy_price - crafting_cost;
+            let mut context = crafting::PreciseCraftingCostContext {
+                purchases: vec![],
+                items: crafted_items.clone(),
+                being_crafted: vec![],
+                lots: lots.clone(),
+                seconds: 0.0,
+            };
+            let priced = crafting::calculate_precise_min_crafting_cost(
+                item_id,
+                1,
+                game_data,
+                &mut tp_listings_map,
+                &lower_bounds,
+                &mut context,
+                opt,
+            );
+            // pricing reserves listings, but only the most profitable item is made, below
+            release_pending(&context.purchases, &mut tp_listings_map);
+            let crafting_cost = match priced {
+                Some(crafting::PreciseCraftingCost {
+                    source: crafting::Source::Crafting,
+                    cost,
+                    ..
+                }) => cost,
+                Some(crafting::PreciseCraftingCost {
+                    cost,
+                    source,
+                    crafting: Some(crafting),
+                }) => {
+                    floors[index] = Some(crafting);
+                    sales[index].stop = format!(
+                        "Cheaper to buy {} ({} each) than to craft ({} each)",
+                        if source == crafting::Source::Vendor {
+                            "from a vendor"
+                        } else {
+                            "on the TP"
+                        },
+                        cost,
+                        crafting
+                    );
+                    continue;
+                }
+                _ => {
+                    sales[index].stop = "An ingredient can't be bought or crafted".to_string();
+                    continue;
+                }
+            };
+            floors[index] = Some(crafting_cost);
+            if let Some(stop) = unpaid(crafting_cost) {
+                sales[index].stop = stop;
+                continue;
+            }
+
+            if wins(crafting_cost) {
+                best = Some((
+                    buy_price - crafting_cost,
+                    index,
+                    crafting_cost,
+                    min_buy,
+                    context,
+                ));
+            }
+        }
+        let Some((profit, index, crafting_cost, min_buy, context)) = best else {
+            break;
+        };
+
+        let item_id = item_ids[index];
+        if opt.value.is_none() {
+            tp_listings_map.get_mut(&item_id).unwrap().sell(1);
+        }
         total_crafting_cost += crafting_cost;
         crafting_count += 1;
+        let sale = &mut sales[index];
+        sale.count += 1;
+        sale.profit += profit;
+        (sale.min_sell, sale.breakeven) = (Money::from_copper(min_buy as i32), crafting_cost);
         crafted_items = context.items;
         lots = context.lots;
 
-        min_sell = min_buy;
-        breakeven = crafting_cost; // minimum to recoup crafting costs
-
-        release_pending(&context.purchases, &mut tp_listings_map);
         finalize_purchases(
             &context.purchases,
             &mut tp_listings_map,
@@ -432,48 +503,65 @@ pub fn calculate_crafting_profit(
 
         let (leftover_cost, leftover_revenue) =
             value_leftovers(&crafted_items.leftovers, &tp_listings_map);
-        let mut score =
-            (listing_profit + leftover_revenue - leftover_cost).to_copper_value() as f64;
+        let sales_profit: Money = sales.iter().map(|sale| sale.profit).sum();
+        let mut new_score =
+            (sales_profit + leftover_revenue - leftover_cost).to_copper_value() as f64;
         if let Some(gold) = opt.min_per_hour {
-            let seconds = crafted_items.crafting_seconds(item_id, &game_data.recipes)
+            let seconds = crafted_items.crafting_seconds(item_ids, &game_data.recipes)
                 + market_seconds(
                     &tp_purchases,
                     vendor_purchases.len(),
-                    &buy_order_quantities,
-                    crafting_count,
-                    opt.value.is_some(),
-                    &output(&crafted_items),
+                    &outputs(&crafted_items, &sales),
                 ) as f64;
-            score -= gold as f64 * 10000.0 * seconds / 3600.0;
+            new_score -= gold as f64 * 10000.0 * seconds / 3600.0;
         }
-        if score > best_score {
-            best_score = score;
-            best_count = crafting_count;
+        let made = sales[index].count;
+        let (total, peak, peak_count) = &mut gains[index];
+        *total += new_score - score;
+        score = new_score;
+        if *total > *peak {
+            (*peak, *peak_count) = (*total, made);
         }
     }
 
-    // Stop at the most profitable count, after selling leftovers and, with --min-per-hour, the
-    // time spent
-    if best_count == 0 {
-        return Err(if crafting_count == 0 {
-            stop
-        } else {
+    // Stop each item where its share of the score peaked, after selling leftovers and, with
+    // --min-per-hour, the time spent
+    let peaks: Vec<u32> = gains.iter().map(|&(.., count)| count).collect();
+    if peaks.iter().all(|&count| count == 0) {
+        return Err(if crafting_count > 0 {
             "Not profitable after charging leftovers or --min-per-hour".to_string()
+        } else if let [sale] = &sales[..] {
+            sale.stop.clone()
+        } else {
+            let stop = |sale: &Sale| format!("{}: {}", game_data.item_name(sale.id), sale.stop);
+            sales.iter().map(stop).collect::<Vec<_>>().join("\n")
         });
     }
-    if best_count < crafting_count {
+    // capped items stop competing for listings, so the rest are planned again; caps only fall, so
+    // this ends
+    if sales
+        .iter()
+        .zip(&peaks)
+        .any(|(sale, &peak)| peak < sale.count)
+    {
         if let Some(purchased_ingredients) = &mut purchased_ingredients {
             purchased_ingredients.clear();
         }
+        // only items past their peak; the rest, never made ones included, are priced again
+        let mut item_caps = opt.item_caps.clone();
+        for (sale, peak) in sales.iter().zip(peaks) {
+            if peak < sale.count {
+                item_caps.insert(sale.id, peak);
+            }
+        }
         return calculate_crafting_profit(
-            item_id,
+            item_ids,
             game_data,
             api_listings_map,
             purchased_ingredients,
             known_recipes,
             &config::CraftingOptions {
-                count: Some(best_count),
-                min_per_hour: None,
+                item_caps,
                 ..opt.clone()
             },
         );
@@ -489,7 +577,6 @@ pub fn calculate_crafting_profit(
             .filter(|id| !items.unlocks.contains_key(id));
         unlearned.min()
     };
-    let mut unlocks_cost = Money::zero();
     while let Some(recipe_id) =
         known_recipes.and_then(|known| next_unlearned(&crafted_items, known))
     {
@@ -540,44 +627,71 @@ pub fn calculate_crafting_profit(
                 &mut tp_purchases,
                 &mut vendor_purchases,
                 purchased_ingredients.as_deref_mut(),
-                item_id,
+                unlock_id,
             );
             (crafted_items, lots) = (context.items, context.lots);
-            listing_profit = listing_profit - cost;
             total_crafting_cost += cost;
-            unlocks_cost += cost;
             Some((unlock_id, cost))
         } else {
             None
         };
         crafted_items.unlocks.insert(recipe_id, unlock);
     }
-    let (unlock_share, _) = unlocks_cost.split(1, crafting_count);
 
     let (leftover_cost, leftover_revenue) =
         value_leftovers(&crafted_items.leftovers, &tp_listings_map);
+    let market_seconds = market_seconds(
+        &tp_purchases,
+        vendor_purchases.len(),
+        &outputs(&crafted_items, &sales),
+    );
+
+    // each unlock item is split by count between the items made whose steps learn from it
+    let learns: Vec<HashSet<u32>> = sales
+        .iter()
+        .map(|sale| {
+            let steps = crafted_items.sorted(&[sale.id], &game_data.recipes);
+            let unlocks = steps
+                .iter()
+                .filter_map(|(.., recipe)| crafted_items.unlock(recipe));
+            unlocks.map(|(unlock_id, _)| unlock_id).collect()
+        })
+        .collect();
+    let bought: BTreeMap<u32, Money> = crafted_items.unlocks.values().flatten().copied().collect();
+    for (unlock_id, mut cost) in bought {
+        let users =
+            (0..sales.len()).filter(|&i| sales[i].count > 0 && learns[i].contains(&unlock_id));
+        let users: Vec<usize> = users.collect();
+        let mut units: u32 = users.iter().map(|&i| sales[i].count).sum();
+        debug_assert!(
+            units > 0,
+            "No item made learns from unlock item {}",
+            unlock_id
+        );
+        for i in users {
+            let sale = &mut sales[i];
+            let (share, rest) = cost.split(sale.count, units);
+            (cost, units) = (rest, units - sale.count);
+            sale.profit = sale.profit - share;
+            sale.breakeven += share / sale.count;
+        }
+    }
+    let profit = sales.iter().map(|sale| sale.profit).sum::<Money>() + leftover_revenue;
+    for sale in sales.iter_mut().filter(|sale| sale.count > 0) {
+        sale.breakeven = sale.breakeven.trading_post_listing_price();
+        sale.stop.clear();
+    }
     Ok(ProfitableItem {
-        id: item_id,
+        sales,
         crafting_cost: total_crafting_cost + leftover_cost,
-        profit: listing_profit + leftover_revenue - leftover_cost,
-        count: crafting_count,
-        max_sell: Money::from_copper(max_sell as i32),
-        min_sell: Money::from_copper(min_sell as i32),
-        breakeven: (breakeven + unlock_share).trading_post_listing_price(),
+        profit: profit - leftover_cost,
         crafting_steps: crafted_items
             .crafting_steps(&game_data.recipes)
             .to_integer(),
         crafting_seconds: crafted_items
-            .crafting_seconds(item_id, &game_data.recipes)
+            .crafting_seconds(item_ids, &game_data.recipes)
             .round() as u32,
-        market_seconds: market_seconds(
-            &tp_purchases,
-            vendor_purchases.len(),
-            &buy_order_quantities,
-            crafting_count,
-            opt.value.is_some(),
-            &output(&crafted_items),
-        ),
+        market_seconds,
         crafted_items,
     })
 }
@@ -667,15 +781,22 @@ fn value_leftovers(
     (cost, revenue)
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct ProfitableItem {
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Sale {
     pub id: u32,
-    pub crafting_cost: Money,
     pub count: u32,
-    pub profit: Money,
     pub max_sell: Money,
     pub min_sell: Money,
     pub breakeven: Money,
+    pub profit: Money, // its sales after fees, less its units' costs and its share of unlock items
+    pub stop: String,  // why none were made
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProfitableItem {
+    pub sales: Vec<Sale>, // each item asked for, made or not, in the order asked for
+    pub crafting_cost: Money,
+    pub profit: Money,
     pub crafting_steps: u32,
     pub crafting_seconds: u32,
     pub market_seconds: u32,
@@ -683,8 +804,12 @@ pub struct ProfitableItem {
 }
 
 impl ProfitableItem {
+    pub fn count(&self) -> u32 {
+        self.sales.iter().map(|sale| sale.count).sum()
+    }
+
     pub fn profit_per_item(&self) -> Money {
-        self.profit / self.count
+        self.profit / self.count()
     }
 
     pub fn profit_per_crafting_step(&self) -> Money {

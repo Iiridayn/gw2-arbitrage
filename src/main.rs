@@ -122,19 +122,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     let game_data = crafting::GameData::new(recipes, items);
 
-    let item_id = match &CONFIG.name {
+    let item_ids = match &CONFIG.name {
         Some(query) => match find_item_by_name(query, &game_data) {
-            Some(item_id) => Some(item_id),
+            Some(item_id) => vec![item_id],
             None => return Ok(()),
         },
-        None => CONFIG.item_id,
+        None => CONFIG.item_ids.clone(),
     };
 
-    if let Some(item_id) = item_id {
+    if !item_ids.is_empty() {
         let (profitable_item, purchased_ingredients, tp_listings_map) =
-            profit::calc_item_profit(item_id, &game_data, &known_recipes, notify).await?;
+            profit::calc_item_profit(&item_ids, &game_data, &known_recipes, notify).await?;
         print_profitable_item(
-            item_id,
+            &item_ids,
             &profitable_item,
             &purchased_ingredients,
             &tp_listings_map,
@@ -260,73 +260,93 @@ fn find_item_by_name(query: &str, game_data: &crafting::GameData) -> Option<u32>
 
 /// Print detailed information about a profitable item
 fn print_profitable_item(
-    item_id: u32,
+    item_ids: &[u32],
     profitable_item: &Result<profit::ProfitableItem, String>,
     purchased_ingredients: &HashMap<(u32, crafting::Source), crafting::PurchasedIngredient>,
     tp_listings_map: &HashMap<u32, api::ItemListings>,
     game_data: &crafting::GameData,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let name = |id: &u32| game_data.item_name(*id);
+
     let profitable_item = match profitable_item {
         Ok(item) => item,
         Err(stop) => {
-            if !game_data.recipes.contains_key(&item_id) {
-                println!("No usable recipe; check -m, -u and the blacklists");
-            } else if CONFIG.crafting.value.is_none()
-                && tp_listings_map
-                    .get(&item_id)
-                    .is_none_or(|listings| listings.buys.is_empty())
-            {
-                println!("No buy orders on the trading post; pass --value to price it");
-            } else {
-                println!("{}", stop);
-            }
+            println!("{}", stop);
             return Ok(());
         }
     };
 
-    let name = |id: &u32| {
-        let item = game_data.items.get(id);
-        item.map_or_else(|| "???".to_string(), |item| item.to_string())
-    };
+    let crafted_items = &profitable_item.crafted_items;
+    let mut sorted = crafted_items.sorted(item_ids, &game_data.recipes);
+    let step_groups = crafting::discipline_groups(&mut sorted, crafted_items);
+    let labels = crafting::disciplines_labels(&sorted, &step_groups);
 
+    // in the order they're crafted
+    let made = profitable_item.sales.iter().filter(|sale| sale.count > 0);
+    let mut sales: Vec<_> = made.cloned().collect();
+    sales.sort_by_key(|sale| sorted.iter().rposition(|&(id, ..)| id == sale.id));
+    let made: Vec<String> = sales.iter().map(|sale| name(&sale.id)).collect();
     println!("============");
     println!(
-        "Shopping list for {} x {} = {} profit ({}, {} / hour, {}%)",
-        profitable_item.count,
-        name(&item_id),
+        "Shopping list for {} = {} profit ({}, {} / hour, {}%)",
+        made.join(", "),
         Money::from_copper(profitable_item.profit.to_copper_value()),
         format_duration((profitable_item.crafting_seconds + profitable_item.market_seconds) as f64),
         profitable_item.profit_per_hour(),
         (profitable_item.profit_on_cost() * 100_f64).round(),
     );
-    let price_msg = if profitable_item.max_sell == profitable_item.min_sell {
-        format!("{}", profitable_item.min_sell)
-    } else {
-        format!(
-            "{} to {}",
-            profitable_item.max_sell, profitable_item.min_sell,
-        )
+    for sale in &sales {
+        let price_msg = if sale.max_sell == sale.min_sell {
+            format!("{}", sale.min_sell)
+        } else {
+            format!("{} to {}", sale.max_sell, sale.min_sell)
+        };
+        // --value replaces the buy orders, so they say nothing about this sale
+        let sale_sparkline = match tp_listings_map.get(&sale.id) {
+            Some(listings) if CONFIG.crafting.value.is_none() => {
+                format!(
+                    " {}",
+                    trading_post::listing_sparkline(&listings.buys, sale.count)
+                )
+            }
+            _ => String::new(),
+        };
+        println!(
+            "Sell {} x {} at: {}{}, Breakeven price: {}, Profit: {}",
+            sale.count,
+            name(&sale.id),
+            price_msg,
+            sale_sparkline,
+            sale.breakeven,
+            Money::from_copper(sale.profit.to_copper_value()),
+        );
+    }
+    // fees are charged on each transaction's total, and the listing fee is paid from the wallet
+    let sales_on_tp: &[profit::Sale] = match CONFIG.crafting.value {
+        None => &sales,
+        Some(_) => &[],
     };
-    // --value replaces the buy orders, so they say nothing about this sale
-    let sale_sparkline = match tp_listings_map.get(&item_id) {
-        Some(listings) if CONFIG.crafting.value.is_none() => format!(
-            " {}",
-            trading_post::listing_sparkline(&listings.buys, profitable_item.count)
+    let mut transactions: Vec<Money> = vec![];
+    for sale in sales_on_tp {
+        let listings = trading_post::ItemListings::from(tp_listings_map[&sale.id].clone());
+        transactions.extend(listings.sale_transactions(sale.count));
+    }
+    let listing_fees: Money = transactions
+        .iter()
+        .map(|total| total.trading_post_listing_fee())
+        .sum();
+    let money_required = profitable_item.crafting_cost + listing_fees;
+    match CONFIG.crafting.value {
+        None => println!(
+            "Money Required: {}, TP pays out: {}",
+            money_required,
+            transactions
+                .iter()
+                .map(|total| total.trading_post_payout())
+                .sum::<Money>()
         ),
-        _ => String::new(),
-    };
-    println!(
-        "Sell at: {}{}, Money Required: {}, Breakeven price: {}",
-        price_msg,
-        sale_sparkline,
-        profitable_item.crafting_cost.increase_by_listing_fee(),
-        profitable_item.breakeven,
-    );
-
-    let crafted_items = &profitable_item.crafted_items;
-    let mut sorted = crafted_items.sorted(item_id, &game_data.recipes);
-    let step_groups = crafting::discipline_groups(&mut sorted, &crafted_items.unlocks);
-    let labels = crafting::disciplines_labels(&sorted, &step_groups);
+        Some(_) => println!("Money Required: {}", money_required),
+    }
 
     // vendor recipes are bought with the rest, unless they take something crafted first
     let mut crafted = HashSet::new();
@@ -507,10 +527,12 @@ fn print_profitable_item(
 
     println!("============");
     println!("Max inventory slots: {}", inventory + 1); // + 1 for the crafting output
-    println!(
-        "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
-        profitable_item.count, item_id
-    );
+    for sale in &sales {
+        println!(
+            "Crafting steps: https://gw2efficiency.com/crafting/calculator/a~1!b~1!c~1!d~{}-{}",
+            sale.count, sale.id
+        );
+    }
     use Discipline::{DoubleClick, Salvage};
     let mut current = None;
     let steps = sorted.iter().zip(&step_groups).zip(&bought);
@@ -559,7 +581,11 @@ fn print_profitable_item(
     }
 
     if !profitable_item.crafted_items.leftovers.is_empty() {
-        println!("Leftovers:");
+        let sold: Money = profitable_item.sales.iter().map(|sale| sale.profit).sum();
+        match (profitable_item.profit - sold).to_copper_value() {
+            0 => println!("Leftovers:"),
+            profit => println!("Leftovers: {} profit", Money::from_copper(profit)),
+        }
         for (leftover_id, (count, cost, _)) in profitable_item.crafted_items.leftovers.iter() {
             // after fees: sold into the buy orders now, or listed at the lowest sell
             let market = tp_listings_map
@@ -590,6 +616,9 @@ fn print_profitable_item(
                 market,
             );
         }
+    }
+    for sale in profitable_item.sales.iter().filter(|sale| sale.count == 0) {
+        println!("Not made: {}: {}", name(&sale.id), sale.stop);
     }
 
     Ok(())
@@ -685,22 +714,19 @@ fn print_item_list(
         // Profit may end up being 0, since potential profitable items are selected based
         // on cached prices, but the actual profit is calculated using detailed listings and
         // prices may have changed since they were cached.
-        if profitable_item.count == 0 {
+        if profitable_item.count() == 0 {
             continue;
         }
 
-        let item_id = profitable_item.id;
-        let name = game_data
-            .items
-            .get(&item_id)
-            .map_or_else(|| "???".to_string(), |item| item.to_string());
+        let item_id = profitable_item.sales[0].id;
+        let name = game_data.item_name(item_id);
 
         let profit_per_hour = profitable_item.profit_per_hour();
 
         // e.g. "MF+Sr 400+J 400"
         let crafted_items = &profitable_item.crafted_items;
-        let mut sorted = crafted_items.sorted(item_id, &game_data.recipes);
-        let step_groups = crafting::discipline_groups(&mut sorted, &crafted_items.unlocks);
+        let mut sorted = crafted_items.sorted(&[item_id], &game_data.recipes);
+        let step_groups = crafting::discipline_groups(&mut sorted, crafted_items);
         let mut labels = crafting::disciplines_labels(&sorted, &step_groups);
         if labels.is_empty() {
             let recipe = sorted.last().expect("Missing recipe").2;
@@ -714,7 +740,7 @@ fn print_item_list(
             item_id,
             unknown_recipes: unlocks.keys().copied().collect(),
             total_profit: profitable_item.profit.to_string(),
-            number_required: profitable_item.count,
+            number_required: profitable_item.count(),
             profit_per_item: profitable_item.profit_per_item().to_copper_value(),
             crafting_steps: profitable_item.crafting_steps,
             profit_per_step: profitable_item.profit_per_crafting_step().to_copper_value(),

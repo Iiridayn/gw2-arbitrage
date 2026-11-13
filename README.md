@@ -25,12 +25,13 @@ To choose amounts by your time instead, pass what an hour is worth to you in gol
 
 1. Pass an item id as input (e.g. `gw2-arbitrage.exe 11538`) to print a shopping list for the item, which considers the total available liquidity for each ingredient on the trading post.
 The shopping list will also include items that should be purchased from crafting station vendors.
+To plan several items at once, pass multiple ids (e.g. `gw2-arbitrage.exe 13419 13503`). They share one set of trading post listings, so a listing bought for one item isn't counted as still there for another. The plan makes one more of whichever item earns the most, again and again, with one shopping list and one list of crafting steps for all of them.
 Instead of an id, `--name` takes the start of each word of the item's name, in any order (e.g. `gw2-arbitrage.exe --name "bo si"` for Bolt of Silk); if several items match, they are listed with their ids.
 
     ![List of materials](screen2.png)
 
     By default the shopping list will assume that you want to produce as many copies of the item as can be profitably sold on the trading post.
-    To limit the number of items that will be crafted a count may also be passed (e.g. `gw2-arbitrage.exe 11538 --count 100` will limit the shopping list to producing 100 items).
+    To limit the number of items that will be crafted a count may also be passed (e.g. `gw2-arbitrage.exe 11538 --count 100` will limit the shopping list to producing 100 items). If multiple ids are passed, `--count` applies to each item independently.
 
     The small charts on the "Sell at" line and on ingredients bought from the trading post are explained in [Sparklines](#sparklines).
 

@@ -24,11 +24,12 @@ pub const CACHE_PREFIX: &str = "cache_";
 #[derive(Clone, Debug, Default)]
 pub struct CraftingOptions {
     pub include_timegated: bool,
-    pub count: Option<u32>,
+    pub count: Option<u32>, // of each item
     pub min_per_item: Option<u32>,
     pub min_per_hour: Option<u32>,
     pub value: Option<u32>,
     pub caps: HashMap<(u32, usize), u32>, // (id, recipe index), most it may make
+    pub item_caps: HashMap<u32, u32>, // most of each item asked for; set by the rerun, not a flag
 }
 
 #[derive(Default)]
@@ -57,7 +58,7 @@ pub struct Config {
     pub input_blacklist: Option<HashSet<u32>>,
     pub output_blacklist: Option<HashSet<u32>>,
 
-    pub item_id: Option<u32>,
+    pub item_ids: Vec<u32>,
     pub name: Option<String>,
 }
 
@@ -78,7 +79,12 @@ impl Config {
 
         config.output_csv = opt.output_csv;
 
-        config.item_id = opt.item_id;
+        let mut seen = HashSet::new();
+        config.item_ids = opt
+            .item_ids
+            .into_iter()
+            .filter(|&id| seen.insert(id))
+            .collect();
         config.name = opt.name;
 
         config.filter_disciplines = opt.filter_disciplines;
@@ -256,12 +262,12 @@ struct Opt {
     #[structopt(short, long, parse(from_os_str))]
     output_csv: Option<PathBuf>,
 
-    /// Print a shopping list of ingredients for the given item id
-    item_id: Option<u32>,
+    /// Print a shopping list of ingredients for the given item ids, crafted together from one market
+    item_ids: Vec<u32>,
 
     /// Print a shopping list for the item whose name has words starting with each of these, in
     /// any order (e.g. "bo si" for Bolt of Silk)
-    #[structopt(long, conflicts_with = "item-id")]
+    #[structopt(long, conflicts_with = "item-ids")]
     name: Option<String>,
 
     /// Limit the maximum number of items produced for a recipe

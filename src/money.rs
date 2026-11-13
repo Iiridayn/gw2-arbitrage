@@ -142,6 +142,10 @@ impl Money {
             0
         })
     }
+    /// What the TP pays out for a sale; the listing fee is taken from the wallet when listing
+    pub fn trading_post_payout(self) -> Money {
+        Money::from_copper((self.copper - self.fee(TRADING_POST_EXCHANGE_FEE)).max(0))
+    }
     /// Has an error of at most 1 copper too high (could have broken even at one copper less)
     pub fn trading_post_listing_price(self) -> Money {
         let copper = Rational32::from(self.value);
@@ -159,12 +163,9 @@ impl Money {
             .to_integer(),
         )
     }
-    /// This will probably not be precise due to rounding errors accumulating as sales are broken
-    /// into smaller batches. Would need to calculate this per sale chunk to be precise - but then
-    /// the TP sometimes glitches w/small sale volumes, requiring filling them multiple times
-    /// anyway, reintroducing rounding errors.
-    pub fn increase_by_listing_fee(self) -> Money {
-        self + Money::from_copper(self.fee(TRADING_POST_LISTING_FEE))
+    /// Paid from the wallet when listing a sale of this
+    pub fn trading_post_listing_fee(self) -> Money {
+        Money::from_copper(self.fee(TRADING_POST_LISTING_FEE))
     }
 
     // Gives an approximate ratio between two money values; for profit on cost
@@ -321,6 +322,27 @@ impl fmt::Debug for Money {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fees_are_charged_on_a_sales_total() {
+        // verified in game: (count, unit price, listing fee, exchange fee); each fee is rounded to
+        // the nearest copper on the total, halves up, at least 1
+        let sales = [
+            (10, 93, 47, 93),
+            (3, 70, 11, 21),
+            (5, 187, 47, 94),
+            (7, 13, 5, 9),
+            (3, 7, 1, 2),
+        ];
+        for (count, price, listing_fee, exchange_fee) in sales {
+            let total = Money::from_copper(count * price);
+            let copper = |money: Money| money.to_copper_value();
+            assert_eq!(copper(total.trading_post_listing_fee()), listing_fee);
+            assert_eq!(copper(total - total.trading_post_payout()), exchange_fee);
+            let revenue = count * price - listing_fee - exchange_fee;
+            assert_eq!(copper(total.trading_post_sale_revenue()), revenue);
+        }
+    }
 
     #[test]
     fn sale_revenue() {

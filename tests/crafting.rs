@@ -39,8 +39,8 @@ fn groups(item_id: u32, recipes: Vec<Recipe>) -> (Vec<Option<usize>>, Vec<String
         ..Default::default()
     };
     let recipes_map = GameData::new(recipes, vec![]).recipes;
-    let mut steps = crafted.sorted(item_id, &recipes_map);
-    let step_groups = crafting::discipline_groups(&mut steps, &crafted.unlocks);
+    let mut steps = crafted.sorted(&[item_id], &recipes_map);
+    let step_groups = crafting::discipline_groups(&mut steps, &crafted);
     let labels = crafting::disciplines_labels(&steps, &step_groups);
     (step_groups, labels)
 }
@@ -115,7 +115,7 @@ fn vendor_preferred_over_merchant_recipe_at_equal_cost() {
 
     let mut purchased_ingredients = HashMap::new();
     let profitable_item = calculate_crafting_profit(
-        1000,
+        &[1000],
         &game_data,
         &tp_listings_map(vec![(1000, vec![(100, 1)], vec![])]),
         Some(&mut purchased_ingredients),
@@ -161,8 +161,8 @@ fn steps_learn_a_recipe_before_using_it() {
         ..Default::default()
     };
     let recipes_map = GameData::new(recipes, vec![]).recipes;
-    let mut steps = crafted.sorted(1, &recipes_map);
-    crafting::discipline_groups(&mut steps, &crafted.unlocks);
+    let mut steps = crafted.sorted(&[1], &recipes_map);
+    crafting::discipline_groups(&mut steps, &crafted);
     let ids: Vec<_> = steps.iter().map(|step| step.0).collect();
     assert_eq!(ids, [50, 1]);
 }
@@ -253,7 +253,7 @@ fn steps_list_each_recipe_of_an_item() {
         recipe(2, [Tailor], 400, &[]),
     ];
     let recipes_map = GameData::new(recipes, vec![]).recipes;
-    let steps = crafted.sorted(1, &recipes_map);
+    let steps = crafted.sorted(&[1], &recipes_map);
     let steps: Vec<_> = steps
         .iter()
         .map(|&(id, n, r)| (id, n, r.disciplines.clone()))
