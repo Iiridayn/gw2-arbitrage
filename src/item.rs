@@ -276,9 +276,9 @@ impl Item {
             // 88955 Lump of Mistonium
             // 89537 Branded Mass
             // 90783 Mistborn Mote
-            86069 | 86977 | 87645 | 88955 | 90783 => Money::from_currency(VolatileMagic, 20),
+            86977 | 87645 | 88955 | 89537 | 90783 => Money::from_currency(VolatileMagic, 20),
             // 86069 Kralkatite Ore
-            89537 => Money::from_currency(VolatileMagic, 4),
+            86069 => Money::from_currency(VolatileMagic, 4),
             // Icebrood Saga
             // 92072 Hatched Chili
             92072 => Some(Money::from_copper(0)),
