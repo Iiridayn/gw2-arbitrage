@@ -1,4 +1,5 @@
 use crate::api;
+use crate::config::CONFIG;
 use crate::custom_recipes;
 use crate::money::Money;
 
@@ -234,6 +235,39 @@ impl Recipe {
             // Would require a key with the characters scope. Still wouldn't detect
             // discoverable recipes, but would detect access to them
         }
+    }
+
+    /// Whether plans may use this recipe: its currencies have a copper value, and the options,
+    /// blacklists and known recipes allow it
+    pub fn is_usable(&self, known_recipes: &HashSet<u32>) -> bool {
+        // Profit can't be calculated unless all of the recipe's currencies have a copper value
+        if self.currency_cost().is_none() {
+            return false;
+        }
+        if !CONFIG.include_mystic_forge && self.disciplines.contains(&Discipline::MysticForge) {
+            return false;
+        }
+        let unknown_id = self.filter_unknown_id(known_recipes);
+        if unknown_id.is_some_and(|id| UNLEARNABLE_RECIPES.contains(&id)) {
+            return false;
+        }
+        if !CONFIG.include_unknown_recipes && unknown_id.is_some() {
+            return false;
+        }
+        if let Some(output_blacklist) = &CONFIG.output_blacklist {
+            if output_blacklist.contains(&self.output_item_id) {
+                return false;
+            }
+        }
+        if let Some(input_blacklist) = &CONFIG.input_blacklist {
+            for ingredient in &self.ingredients {
+                if input_blacklist.contains(&ingredient.item_id) {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 
     /// The recipe's id, if the account doesn't know it
