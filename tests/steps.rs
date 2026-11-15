@@ -157,6 +157,38 @@ fn hand_off_part_is_made_first() {
 }
 
 #[test]
+fn merchant_steps_are_bought_unless_they_take_something_crafted() {
+    let recipes = [
+        recipe(2, [Armorsmith], 400, &[]),
+        recipe(3, [Merchant], 0, &[2]),
+        recipe(4, [Merchant], 0, &[9]),
+    ];
+    let steps = [
+        (2, 1, &recipes[0]),
+        (4, 1, &recipes[2]),
+        (3, 1, &recipes[1]),
+    ];
+    assert_eq!(steps::bought_steps(&steps), [false, true, false]);
+}
+
+#[test]
+fn mystic_forge_splits_a_repeated_ingredient_once_for_all_its_recipes() {
+    // 2 is taken three times by 1 and twice by 3, so its stack is split twice; 4 isn't made at
+    // the Mystic Forge
+    let recipes = vec![
+        recipe(1, [MysticForge], 0, &[2, 2, 2, 5]),
+        recipe(3, [MysticForge], 0, &[2, 2]),
+        recipe(4, [Armorsmith], 400, &[6, 6]),
+    ];
+    let crafted = CraftedItems {
+        crafted: HashMap::from([((1, 0), 1), ((3, 0), 1), ((4, 0), 1)]),
+        ..Default::default()
+    };
+    let recipes_map = GameData::new(recipes, vec![]).recipes;
+    assert_eq!(crafted.mystic_forge_splits(&recipes_map), 2);
+}
+
+#[test]
 fn steps_list_each_recipe_of_an_item() {
     let crafted = CraftedItems {
         crafted: HashMap::from([((1, 0), 2), ((2, 0), 1), ((2, 1), 1)]),

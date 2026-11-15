@@ -168,7 +168,7 @@ impl Money {
         Money::from_copper(self.fee(TRADING_POST_LISTING_FEE))
     }
 
-    // Gives an approximate ratio between two money values; for profit on cost
+    /// Gives an approximate ratio between two money values; for profit on cost
     pub fn percent(self, other: Self) -> f64 {
         self.value as f64 / other.value as f64
     }
@@ -282,7 +282,8 @@ impl std::ops::Div<u32> for Money {
     type Output = Self;
 
     fn div(self, other: u32) -> Self {
-        self.split(1, other).0
+        let (share, _) = self.split(1, other);
+        share
     }
 }
 impl PartialOrd for Money {

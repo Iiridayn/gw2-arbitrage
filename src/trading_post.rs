@@ -1,7 +1,7 @@
 use num_traits::Zero;
-use std::collections::HashMap;
 
 use crate::api;
+use crate::crafting::{Purchases, Source::TradingPost};
 use crate::item::ITEM_STACK_SIZE;
 use crate::money::Money;
 use crate::recipe::{Discipline::MysticForge, Recipe, INGREDIENT_SWITCH_SECONDS};
@@ -22,14 +22,12 @@ pub type Output<'a> = (u32, u32, Vec<(&'a Recipe, u32)>);
 /// Seconds spent buying and selling. One transaction per stack bought of each TP ingredient, and
 /// per stack sold into each price level, since a sale can't span prices. Sales are made while the
 /// output crafts, except at crafting stations, where a stack can't be sold until it's complete.
-pub fn market_seconds(
-    tp_purchases: &HashMap<u32, u32>,
-    vendor_purchases: usize,
-    outputs: &[Output],
-) -> u32 {
+pub fn market_seconds(purchases: &Purchases, outputs: &[Output]) -> u32 {
+    let tp_purchases = purchases
+        .iter()
+        .filter(|((_, source), _)| *source == TradingPost);
     let buys: u32 = tp_purchases
-        .values()
-        .map(|count| count.div_ceil(ITEM_STACK_SIZE))
+        .map(|(_, ingredient)| ingredient.count.div_ceil(ITEM_STACK_SIZE))
         .sum();
     // the cooldown counts the sales of every output
     let pace = |sales: u32| {
@@ -37,8 +35,8 @@ pub fn market_seconds(
             + sales.saturating_sub(SALES_BEFORE_COOLDOWN) as f64 * SALE_COOLDOWN_SECONDS
     };
     let mut sales_before = 0;
-    let mut seconds = buys as f64 * TP_ACTION_SECONDS
-        + (tp_purchases.len() + vendor_purchases) as f64 * INGREDIENT_SWITCH_SECONDS;
+    let mut seconds =
+        buys as f64 * TP_ACTION_SECONDS + purchases.len() as f64 * INGREDIENT_SWITCH_SECONDS;
     for &(sales, sold, ref output) in outputs.iter().filter(|(_, sold, _)| *sold > 0) {
         let selling = pace(sales_before + sales) - pace(sales_before);
         sales_before += sales;
@@ -248,7 +246,7 @@ pub fn listing_sparkline(listings: &[api::Listing], count: u32) -> String {
     }
 
     let (best, last) = match (taken.first(), taken.last()) {
-        (Some(best), Some(last)) => (best.0 as f64, last.0 as f64),
+        (Some(&(best, _)), Some(&(last, _))) => (best as f64, last as f64),
         _ => return String::new(),
     };
     let range = (last - best).abs();
@@ -270,8 +268,8 @@ pub fn listing_sparkline(listings: &[api::Listing], count: u32) -> String {
     let continuation_reach = (range / slices as f64).max(last * 0.01).max(1.0);
     let continuation: f64 = remaining
         .iter()
-        .filter(|listing| (listing.0 as f64 - last).abs() <= continuation_reach)
-        .map(|listing| listing.0 as f64 * listing.1 as f64)
+        .filter(|&&(price, _)| (price as f64 - last).abs() <= continuation_reach)
+        .map(|&(price, quantity)| price as f64 * quantity as f64)
         .sum();
 
     let tallest = bars.iter().cloned().fold(0.0, f64::max);

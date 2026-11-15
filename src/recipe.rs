@@ -206,8 +206,6 @@ impl Recipe {
 
     // see https://wiki.guildwars2.com/wiki/Category:Time_gated_recipes
     // for a list of time gated recipes
-    // I've left Charged Quartz Crystals off the list, since they can
-    // drop from containers.
     pub fn is_timegated(&self) -> bool {
         self.output_item_id == 46740         // Spool of Silk Weaving Thread
             || self.output_item_id == 46742  // Lump of Mithrillium

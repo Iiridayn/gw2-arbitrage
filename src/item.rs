@@ -178,7 +178,7 @@ pub enum ItemConsumableType {
 }
 
 impl Item {
-    // Output is cost of a lot, items in a lot
+    /// Output is cost of a lot, items in a lot
     pub fn vendor_cost(&self) -> Option<(Money, u32)> {
         // standard vendor sell price is generally buy price * 8, see:
         // https://forum-en.gw2archive.eu/forum/community/api/How-to-get-the-vendor-sell-price
@@ -243,7 +243,7 @@ impl Item {
         }
     }
 
-    // Account Bound Tokens; output is value of a lot, items in a lot
+    /// Account Bound Tokens; output is value of a lot, items in a lot
     pub fn token_value(&self) -> Option<(Money, u32)> {
         // 92272 Eternal Ice Shard
         if self.id == 92272 {

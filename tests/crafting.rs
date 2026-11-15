@@ -1,9 +1,10 @@
 mod common;
 
-use common::{one_ingredient_game_data, tp_listings_map, MockRecipe};
+use common::{api_listings, one_ingredient_game_data, MockRecipe};
 
 use gw2_arbitrage::{
     api::{Price, PriceInfo, RecipeIngredient},
+    config::CraftingOptions,
     crafting::{self, GameData, SummaryPrices},
     money::Money,
     profit::calculate_crafting_profit,
@@ -23,19 +24,102 @@ fn vendor_preferred_over_merchant_recipe_at_equal_cost() {
     }];
     game_data.recipes.insert(12156, vec![jug_recipe]);
 
-    let mut purchased_ingredients = HashMap::new();
     let profitable_item = calculate_crafting_profit(
         &[1000],
         &game_data,
-        &tp_listings_map(vec![(1000, vec![(100, 1)], vec![])]),
-        Some(&mut purchased_ingredients),
+        &api_listings(vec![(1000, vec![(100, 1)], vec![])]),
         None,
         &Default::default(),
     )
     .unwrap();
 
-    assert!(purchased_ingredients.contains_key(&(12156, crafting::Source::Vendor)));
+    let purchases = &profitable_item.purchases;
+    assert!(purchases.contains_key(&(12156, crafting::Source::Vendor)));
     assert_eq!(profitable_item.crafting_steps, 1);
+}
+
+#[test]
+fn equal_costs_are_bought_on_the_tp_before_a_vendor() {
+    // Jug of Water: 8c from the vendor, in 10s, and listed at 8c
+    let game_data = one_ingredient_game_data(1000, 12156, 1);
+    let api_listings = api_listings(vec![
+        (12156, vec![], vec![(8, 1000)]),
+        (1000, vec![(100, 1)], vec![]),
+    ]);
+    let item = calculate_crafting_profit(
+        &[1000],
+        &game_data,
+        &api_listings,
+        None,
+        &Default::default(),
+    );
+    let sources: Vec<_> = item.unwrap().purchases.into_keys().collect();
+    assert_eq!(sources, [(12156, crafting::Source::TradingPost)]);
+
+    let prices = HashMap::from([listed(12156, 8)]);
+    let prices = SummaryPrices::new(prices, &game_data);
+    let estimate = crafting::calculate_estimated_min_crafting_cost(
+        12156,
+        1,
+        &game_data,
+        &prices,
+        &mut vec![],
+        &Default::default(),
+    );
+    assert_eq!(estimate.unwrap().source, crafting::Source::TradingPost);
+}
+
+#[test]
+fn an_item_listed_at_its_crafting_cost_is_bought_not_crafted() {
+    // 1000 is listed at 100, and crafted from one 1001 at 100
+    let game_data = one_ingredient_game_data(1000, 1001, 0);
+    let api_listings = api_listings(vec![
+        (1001, vec![], vec![(100, 1000)]),
+        (1000, vec![(200, 1)], vec![(100, 1)]),
+    ]);
+    let stop = calculate_crafting_profit(
+        &[1000],
+        &game_data,
+        &api_listings,
+        None,
+        &Default::default(),
+    );
+    let cost = Money::from_copper(100);
+    let why = format!(
+        "Cheaper to buy on the TP ({} each) than to craft ({} each)",
+        cost, cost
+    );
+    assert_eq!(stop, Err(why));
+}
+
+#[test]
+fn timegated_recipes_are_used_only_when_included() {
+    // Lump of Mithrillium, crafted once a day
+    let game_data = one_ingredient_game_data(46742, 1001, 0);
+    let api_listings = api_listings(vec![
+        (1001, vec![], vec![(10, 1000)]),
+        (46742, vec![(100, 1)], vec![]),
+    ]);
+    let prices = SummaryPrices::new(HashMap::from([listed(1001, 10)]), &game_data);
+    for include_timegated in [false, true] {
+        let opt = CraftingOptions {
+            include_timegated,
+            ..Default::default()
+        };
+        let made = calculate_crafting_profit(&[46742], &game_data, &api_listings, None, &opt);
+        let estimate = crafting::calculate_estimated_min_crafting_cost(
+            46742,
+            1,
+            &game_data,
+            &prices,
+            &mut vec![],
+            &opt,
+        );
+        assert_eq!(
+            (made.is_ok(), estimate.is_some()),
+            (include_timegated, include_timegated)
+        );
+    }
 }
 
 #[test]

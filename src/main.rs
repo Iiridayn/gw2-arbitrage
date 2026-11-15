@@ -24,6 +24,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
     let mut stage = Instant::now();
+    let game_data = load_game_data(&known_recipes, notify, &mut stage).await?;
+
+    let item_ids = match &CONFIG.name {
+        Some(query) => match find_item_by_name(query, &game_data) {
+            Some(item_id) => vec![item_id],
+            None => return Ok(()),
+        },
+        None => CONFIG.item_ids.clone(),
+    };
+
+    if !item_ids.is_empty() {
+        let (profitable_item, api_listings) =
+            profit::calc_item_profit(&item_ids, &game_data, &known_recipes, notify).await?;
+        output::print_profitable_item(&item_ids, &profitable_item, &api_listings, &game_data)?;
+    } else {
+        let profitable_items =
+            price_item_list(&game_data, &known_recipes, notify, &mut stage).await?;
+        output::print_item_list(&profitable_items, &game_data)?;
+    }
+
+    Ok(())
+}
+
+/// The recipes and items, from the data files or the API, keeping the recipes usable with
+/// `known_recipes`
+async fn load_game_data(
+    known_recipes: &HashSet<u32>,
+    notify: Option<&dyn Fn(&str)>,
+    stage: &mut Instant,
+) -> Result<crafting::GameData, Box<dyn std::error::Error>> {
     println!("Loading recipes");
     let api_recipes = {
         let mut api_recipes: Vec<api::Recipe> = request::get_data(
@@ -41,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Loaded {} recipes stored at '{}' in {} ms",
         api_recipes.len(),
         CONFIG.api_recipes_file.display(),
-        lap_ms(&mut stage)
+        lap_ms(stage)
     );
 
     println!("Loading custom recipes");
@@ -59,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Loaded {} custom recipes stored at '{}' in {} ms",
         custom_recipes.len(),
         CONFIG.custom_recipes_file.display(),
-        lap_ms(&mut stage)
+        lap_ms(stage)
     );
 
     println!("Loading items");
@@ -74,101 +104,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Loaded {} items stored at '{}' in {} ms",
         items.len(),
         CONFIG.items_file.display(),
-        lap_ms(&mut stage)
+        lap_ms(stage)
     );
 
     let recipes = api_recipes
         .into_iter()
         .map(Recipe::from)
-        // api recipes first, so they're kept over custom recipes that make the same
+        // api recipes first, so of two identical recipes the api one, with its recipe id, is kept
         .chain(custom_recipes)
-        .filter(|recipe| recipe.is_usable(&known_recipes));
-    let game_data = crafting::GameData::new(recipes, items);
+        .filter(|recipe| recipe.is_usable(known_recipes));
+    Ok(crafting::GameData::new(recipes, items))
+}
 
-    let item_ids = match &CONFIG.name {
-        Some(query) => match find_item_by_name(query, &game_data) {
-            Some(item_id) => vec![item_id],
-            None => return Ok(()),
-        },
-        None => CONFIG.item_ids.clone(),
+/// The profitable items, from every TP price down to the detailed listings of the candidates
+async fn price_item_list(
+    game_data: &crafting::GameData,
+    known_recipes: &HashSet<u32>,
+    notify: Option<&dyn Fn(&str)>,
+    stage: &mut Instant,
+) -> Result<Vec<profit::ProfitableItem>, Box<dyn std::error::Error>> {
+    println!("Loading trading post prices");
+    print!("Pages:");
+    let commerce_notify = |url: &str| {
+        print!(" {}", &url[51..url.len() - 14]);
+        io::stdout()
+            .flush()
+            .unwrap_or_else(|e| println!("Flush failed: {}", &e));
     };
+    let tp_prices = request::fetch_tp_prices(Some(&commerce_notify as &dyn Fn(&str))).await?;
+    println!();
+    println!(
+        "Loaded {} trading post prices in {} ms",
+        tp_prices.len(),
+        lap_ms(stage)
+    );
 
-    if !item_ids.is_empty() {
-        let (profitable_item, purchased_ingredients, tp_listings_map) =
-            profit::calc_item_profit(&item_ids, &game_data, &known_recipes, notify).await?;
-        output::print_profitable_item(
-            &item_ids,
-            &profitable_item,
-            &purchased_ingredients,
-            &tp_listings_map,
-            &game_data,
-        )?;
-    } else {
-        println!("Loading trading post prices");
-        print!("Pages:");
-        let commerce_notify = |url: &str| {
-            print!(" {}", &url[51..url.len() - 14]);
-            io::stdout()
-                .flush()
-                .unwrap_or_else(|e| println!("Flush failed: {}", &e));
-        };
-        let tp_prices = request::fetch_tp_prices(Some(&commerce_notify as &dyn Fn(&str))).await?;
-        println!();
-        println!(
-            "Loaded {} trading post prices in {} ms",
-            tp_prices.len(),
-            lap_ms(&mut stage)
-        );
+    let prices = crafting::SummaryPrices::new(profit::vec_to_map(tp_prices, |x| x.id), game_data);
+    println!(
+        "Found the lowest possible cost of {} items in {} ms",
+        prices.lower_bounds.len(),
+        lap_ms(stage)
+    );
 
-        let prices =
-            crafting::SummaryPrices::new(profit::vec_to_map(tp_prices, |x| x.id), &game_data);
-        println!(
-            "Found the lowest possible cost of {} items in {} ms",
-            prices.lower_bounds.len(),
-            lap_ms(&mut stage)
-        );
+    let profitable_item_ids = profit::find_profitable_items(&prices, game_data);
+    println!(
+        "Found {} candidates in {} ms",
+        profitable_item_ids.len(),
+        lap_ms(stage)
+    );
 
-        let profitable_item_ids = profit::find_profitable_items(&prices, &game_data);
-        println!(
-            "Found {} candidates in {} ms",
-            profitable_item_ids.len(),
-            lap_ms(&mut stage)
-        );
+    println!("Loading detailed trading post listings");
+    let request_listing_item_ids =
+        game_data.collect_tree_ids(&profitable_item_ids, Some(known_recipes));
+    // Caching these is pointless, as the vector changes on each run, leading to new URLs
+    let tp_listings = request::fetch_item_listings(&request_listing_item_ids, None, notify).await?;
+    println!(
+        "Loaded {} detailed trading post listings in {} ms",
+        tp_listings.len(),
+        lap_ms(stage)
+    );
+    let api_listings = profit::vec_to_map(tp_listings, |x| x.id);
 
-        println!("Loading detailed trading post listings");
-        let mut request_listing_item_ids: Vec<u32> = profitable_item_ids
-            .iter()
-            .flat_map(|&id| game_data.collect_tree_ids(id, Some(&known_recipes)))
-            .collect();
-        request_listing_item_ids.sort_unstable();
-        request_listing_item_ids.dedup();
-        // Caching these is pointless, as the vector changes on each run, leading to new URLs
-        let tp_listings =
-            request::fetch_item_listings(&request_listing_item_ids, None, notify).await?;
-        println!(
-            "Loaded {} detailed trading post listings in {} ms",
-            tp_listings.len(),
-            lap_ms(&mut stage)
-        );
-        let tp_listings_map = profit::vec_to_map(tp_listings, |x| x.id);
-
-        let profitable_items = profit::profitable_item_list(
-            &tp_listings_map,
-            &profitable_item_ids,
-            &request_listing_item_ids,
-            &game_data,
-            &known_recipes,
-        );
-        println!(
-            "Priced {} items in {} ms",
-            profitable_items.len(),
-            lap_ms(&mut stage)
-        );
-
-        output::print_item_list(&profitable_items, &game_data)?;
-    }
-
-    Ok(())
+    let profitable_items = profit::profitable_item_list(
+        &api_listings,
+        &profitable_item_ids,
+        &request_listing_item_ids,
+        game_data,
+        known_recipes,
+    );
+    println!(
+        "Priced {} items in {} ms",
+        profitable_items.len(),
+        lap_ms(stage)
+    );
+    Ok(profitable_items)
 }
 
 /// Milliseconds since `start`, restarting it

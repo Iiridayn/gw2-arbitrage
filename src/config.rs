@@ -126,12 +126,9 @@ impl Config {
             None
         };
 
-        config.ascended = if let Some(provided) = opt.ascended_value {
-            provided.or(Some(0))
-        } else if let Some(currencies) = &file.currencies {
-            currencies.ascended
-        } else {
-            None
+        config.ascended = match opt.ascended_value {
+            Some(provided) => provided.or(Some(0)),
+            None => file.currencies.as_ref().and_then(|c| c.ascended),
         };
 
         let currencies = file.currencies.as_ref();
@@ -153,7 +150,8 @@ impl Config {
             config.output_blacklist = blacklists.outputs.map(HashSet::from_iter);
         };
 
-        let cache_dir = cache_dir(&opt.cache_dir).expect("Failed to identify cache dir");
+        let cache_dir =
+            app_dir(&opt.cache_dir, dirs::cache_dir()).expect("Failed to identify cache dir");
         ensure_dir(&cache_dir).expect("Failed to create cache dir");
         if let Err(e) = flush_cache(&cache_dir) {
             println!("Failed to flush cache dir {}: {}", &cache_dir.display(), e)
@@ -164,45 +162,20 @@ impl Config {
         }
         config.snapshot_dir = opt.snapshot;
 
-        let data_dir = data_dir(&opt.data_dir).expect("Failed to identify data dir");
+        let data_dir =
+            app_dir(&opt.data_dir, dirs::data_dir()).expect("Failed to identify data dir");
         ensure_dir(&data_dir).expect("Failed to create data dir");
 
-        let mut api_recipes_path = data_dir.clone();
-        api_recipes_path.push("recipes.bin");
-        config.api_recipes_file = api_recipes_path;
-
-        let mut custom_recipes_path = data_dir.clone();
-        custom_recipes_path.push("custom.bin");
-        config.custom_recipes_file = custom_recipes_path;
-
+        config.api_recipes_file = data_dir.join("recipes.bin");
+        config.custom_recipes_file = data_dir.join("custom.bin");
         let lang_suffix =
             Language::code(&config.lang).map_or_else(|| "".to_string(), |c| format!("_{}", c));
-        let mut items_path = data_dir.clone();
-        items_path.push(format!("items{}.bin", lang_suffix));
-        config.items_file = items_path;
+        config.items_file = data_dir.join(format!("items{}.bin", lang_suffix));
 
         if opt.reset_data {
-            if let Err(e) = remove_data_file(&config.items_file) {
-                println!(
-                    "Failed to remove file {}: {}",
-                    &config.items_file.display(),
-                    e
-                )
-            };
-            if let Err(e) = remove_data_file(&config.api_recipes_file) {
-                println!(
-                    "Failed to remove file {}: {}",
-                    &config.api_recipes_file.display(),
-                    e
-                )
-            };
-            if let Err(e) = remove_data_file(&config.custom_recipes_file) {
-                println!(
-                    "Failed to remove file {}: {}",
-                    &config.custom_recipes_file.display(),
-                    e
-                )
-            };
+            remove_data_file(&config.items_file);
+            remove_data_file(&config.api_recipes_file);
+            remove_data_file(&config.custom_recipes_file);
         }
 
         config
@@ -351,7 +324,7 @@ static CACHE_DIR_HELP: Lazy<String> = Lazy::new(|| {
         r#"Save cached API calls to this directory
 
 If provided, the parent directory of the cache directory must already exist. Defaults to '{}'."#,
-        cache_dir(&None).unwrap().display()
+        app_dir(&None, dirs::cache_dir()).unwrap().display()
     )
 });
 
@@ -360,7 +333,7 @@ static DATA_DIR_HELP: Lazy<String> = Lazy::new(|| {
         r#"Save cached recipes and items to this directory
 
 If provided, the parent directory of the cache directory must already exist. Defaults to '{}'."#,
-        data_dir(&None).unwrap().display()
+        app_dir(&None, dirs::data_dir()).unwrap().display()
     )
 });
 
@@ -490,16 +463,17 @@ fn ensure_dir(dir: &PathBuf) -> Result<&PathBuf, Box<dyn std::error::Error>> {
     }
 }
 
-fn cache_dir(dir: &Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>> {
+/// `dir` if given, else `base` with a gw2-arbitrage folder in it if `base` exists, else the
+/// working directory
+fn app_dir(
+    dir: &Option<PathBuf>,
+    base: Option<PathBuf>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(dir) = dir {
         return Ok(dir.clone());
     }
-    dirs::cache_dir()
-        .filter(|d| d.exists())
-        .map(|mut cache_dir| {
-            cache_dir.push("gw2-arbitrage");
-            cache_dir
-        })
+    base.filter(|d| d.exists())
+        .map(|d| d.join("gw2-arbitrage"))
         .or_else(|| std::env::current_dir().ok())
         .ok_or_else(|| "Failed to access current working directory".into())
 }
@@ -528,43 +502,18 @@ fn flush_cache(cache_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn data_dir(dir: &Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    if let Some(dir) = dir {
-        return Ok(dir.clone());
-    }
-    dirs::data_dir()
-        .filter(|d| d.exists())
-        .map(|mut data_dir| {
-            data_dir.push("gw2-arbitrage");
-            data_dir
-        })
-        .or_else(|| std::env::current_dir().ok())
-        .ok_or_else(|| "Failed to access current working directory".into())
-}
-
-fn remove_data_file(file: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn remove_data_file(file: &PathBuf) {
     if file.exists() {
         println!("Removing existing data file at '{}'", file.display());
-        std::fs::remove_file(file)
-            .map_err(|e| format!("Failed to remove '{}' ({})", file.display(), e))?;
+        if let Err(e) = std::fs::remove_file(file) {
+            println!("Failed to remove file {}: {}", file.display(), e);
+        }
     }
-    Ok(())
 }
 
 fn config_file(file: &Option<PathBuf>) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(file) = file {
         return Ok(file.clone());
     }
-    dirs::config_dir()
-        .filter(|d| d.exists())
-        .map(|mut config_dir| {
-            config_dir.push("gw2-arbitrage");
-            config_dir
-        })
-        .or_else(|| std::env::current_dir().ok())
-        .map(|mut path| {
-            path.push("gw2-arbitrage.toml");
-            path
-        })
-        .ok_or_else(|| "Failed to access current working directory".into())
+    Ok(app_dir(&None, dirs::config_dir())?.join("gw2-arbitrage.toml"))
 }

@@ -1,7 +1,7 @@
 use crate::crafting::CraftedItems;
 use crate::recipe::{Discipline, Recipe};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl CraftedItems {
     /// Sort the steps making `item_ids`, by each recipe used, in the order which will remove
@@ -35,11 +35,11 @@ impl CraftedItems {
         let mut sum = 0;
         for (_, (steps_sum, steps)) in ingredients {
             sum += steps_sum;
-            for step in steps {
-                if !sorted
-                    .iter()
-                    .any(|s| s.0 == step.0 && std::ptr::eq(s.2, step.2))
-                {
+            for step @ (id, _, recipe) in steps {
+                let same = |&(other_id, _, other_recipe): &(u32, u32, &Recipe)| {
+                    other_id == id && std::ptr::eq(other_recipe, recipe)
+                };
+                if !sorted.iter().any(same) {
                     sorted.push(step);
                 }
             }
@@ -72,7 +72,28 @@ impl CraftedItems {
         (sum + consumed * count / recipe.output_item_count, sorted)
     }
 
-    // TODO: use an iterator? - complains about lifetimes though, despite copy data output w/o references
+    /// Inventory slots for splitting stacks: a Mystic Forge recipe that takes an ingredient more
+    /// than once needs its stack split, once for all such recipes
+    pub fn mystic_forge_splits(&self, recipes_map: &HashMap<u32, Vec<Recipe>>) -> u32 {
+        let mut splits: HashMap<u32, usize> = HashMap::new();
+        for &(id, index) in self.crafted.keys() {
+            let recipe = &recipes_map[&id][index];
+            if !recipe.disciplines.contains(&Discipline::MysticForge) {
+                continue;
+            }
+            for ingredient in &recipe.ingredients {
+                let copies = recipe
+                    .ingredients
+                    .iter()
+                    .filter(|i| i.item_id == ingredient.item_id);
+                let split = splits.entry(ingredient.item_id).or_default();
+                *split = (*split).max(copies.count() - 1);
+            }
+        }
+        splits.values().sum::<usize>() as u32
+    }
+
+    /// The steps making `item_ids`, emptying the inventory fastest
     pub fn sorted<'a>(
         &self,
         item_ids: &[u32],
@@ -81,6 +102,26 @@ impl CraftedItems {
         self.sort_ingredients(item_ids.iter().copied(), recipes_map, &mut vec![])
             .1
     }
+}
+
+/// Whether each step is a merchant recipe bought with the rest of the shopping, as it takes nothing
+/// crafted before it
+pub fn bought_steps(steps: &[(u32, u32, &Recipe)]) -> Vec<bool> {
+    let mut crafted = HashSet::new();
+    steps
+        .iter()
+        .map(|&(id, _, recipe)| {
+            let uses_crafted = recipe
+                .ingredients
+                .iter()
+                .any(|i| crafted.contains(&i.item_id));
+            let bought = recipe.disciplines.contains(&Discipline::Merchant) && !uses_crafted;
+            if !bought {
+                crafted.insert(id);
+            }
+            bought
+        })
+        .collect()
 }
 
 /// Group crafting station steps, starting from the most restrictive step, and
@@ -165,7 +206,7 @@ pub fn disciplines_labels(
                 .iter()
                 .zip(step_groups)
                 .filter(|(_, step_group)| **step_group == Some(group))
-                .map(|(step, _)| step.2)
+                .map(|(&(.., recipe), _)| recipe)
                 .collect();
             let mut shared = recipes[0].disciplines.clone();
             shared.retain(|d| d.is_station() && recipes.iter().all(|r| r.disciplines.contains(d)));
