@@ -26,7 +26,7 @@ use crate::config::{self, CONFIG};
 
 // Data files older than these unix timestamps are re-fetched; bump to refresh existing users
 pub const API_RECIPES_MIN_TIMESTAMP: u64 = 1793535619;
-pub const CUSTOM_RECIPES_MIN_TIMESTAMP: u64 = 1794467900;
+pub const CUSTOM_RECIPES_MIN_TIMESTAMP: u64 = 1794744005;
 pub const ITEMS_MIN_TIMESTAMP: u64 = 1793535619;
 
 const PARALLEL_REQUESTS: usize = 10;

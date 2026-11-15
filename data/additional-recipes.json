@@ -89,5 +89,6 @@
   {"name":"Swim-Speed Infusion +25","output_item_id":87502,"output_item_count":1,"ingredients":[{"count":32,"type":"Item","id":87495},{"count":7168,"type":"Currency","id":1}],"disciplines":["Merchant"],"source":"Automatic"},
   {"name":"Swim-Speed Infusion +30","output_item_id":87544,"output_item_count":1,"ingredients":[{"count":32,"type":"Item","id":87502},{"count":7168,"type":"Currency","id":1}],"disciplines":["Merchant"],"source":"Automatic"},
   {"name":"Sealed Package of Snowballs","output_item_id":24,"output_item_count":1,"ingredients":[{"count":1,"type":"Item","id":86601},{"count":700,"type":"Currency","id":2}],"disciplines":["Merchant"],"source":"Automatic"},
-  {"name":"Sealed Package of Snowballs","output_item_id":24,"output_item_count":10,"ingredients":[{"count":10,"type":"Item","id":86601},{"count":7000,"type":"Currency","id":2}],"disciplines":["Merchant"],"source":"Automatic"}
+  {"name":"Sealed Package of Snowballs","output_item_id":24,"output_item_count":10,"ingredients":[{"count":10,"type":"Item","id":86601},{"count":7000,"type":"Currency","id":2}],"disciplines":["Merchant"],"source":"Automatic"},
+  {"name":"Recipe: Snow Diamond Ornament","output_item_id":106862,"output_item_count":1,"ingredients":[{"count":3,"type":"Item","id":86627},{"count":7000,"type":"Currency","id":2}],"disciplines":["Merchant"],"source":"Automatic"}
 ]
