@@ -215,7 +215,8 @@ impl Recipe {
     // see https://wiki.guildwars2.com/wiki/Category:Time_gated_recipes
     // for a list of time gated recipes
     pub fn is_timegated(&self) -> bool {
-        self.output_item_id == 46740         // Spool of Silk Weaving Thread
+        self.disciplines.contains(&Discipline::Growing)
+            || self.output_item_id == 46740  // Spool of Silk Weaving Thread
             || self.output_item_id == 46742  // Lump of Mithrillium
             || self.output_item_id == 46744  // Glob of Elder Spirit Residue
             || self.output_item_id == 46745  // Spool of Thick Elonian Cord
