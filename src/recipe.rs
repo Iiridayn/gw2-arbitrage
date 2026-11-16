@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString, EnumVariantNames};
 
 /// Moving to the next recipe in the crafting interface
-const RECIPE_SWITCH_SECONDS: f64 = 1.0;
+const RECIPE_SWITCH_MS: u32 = 1_000;
 /// Finding an ingredient on the TP or at a vendor and typing the quantity
-pub const INGREDIENT_SWITCH_SECONDS: f64 = 6.0;
+pub const INGREDIENT_SWITCH_MS: u32 = 6_000;
 /// Recipes that can no longer be learned: Wooden Sword, Asuran Harpoon
 pub const UNLEARNABLE_RECIPES: [u32; 2] = [5424, 6057];
 
@@ -169,29 +169,37 @@ impl TryFrom<custom_recipes::Recipe> for Recipe {
 }
 
 impl Recipe {
-    /// Estimated seconds to make one batch of this recipe
-    pub fn crafting_seconds(&self, steps: u32) -> f64 {
+    /// Estimated milliseconds to make `steps` batches of this recipe
+    pub fn crafting_ms(&self, steps: u32) -> u32 {
         use Discipline::{
             Achievement, Charge, DoubleClick, Growing, Merchant, MysticForge, Salvage,
         };
 
-        let steps = steps as f64;
         let has = |discipline: Discipline| self.disciplines.contains(&discipline);
-        // Fit of batches timed at 1s, 2s and 7s base craft times
-        let crafting_station = |base_seconds: f64| base_seconds * (2.3 + 0.16 * steps);
+        // Fit of batches timed at 1s, 2s and 7s base craft times: 2.3 times the base, plus 0.16
+        // times it per batch
+        let crafting_station = |base_ms: u32| {
+            debug_assert_eq!(
+                base_ms % 50,
+                0,
+                "{} ms has no whole 2.3 or 0.16 of it",
+                base_ms
+            );
+            base_ms * 23 / 10 + base_ms * 4 / 25 * steps
+        };
 
         if let Some(ms) = self.time_to_craft_ms {
-            RECIPE_SWITCH_SECONDS + crafting_station(ms as f64 / 1000.0)
+            RECIPE_SWITCH_MS + crafting_station(ms)
         } else if has(MysticForge) {
-            15.0 + 2.0 * (steps - 1.0)
+            13_000 + 2_000 * steps // 15s for the first, 2s for each after
         } else if has(DoubleClick) || has(Salvage) {
-            RECIPE_SWITCH_SECONDS + 0.5 * steps
+            RECIPE_SWITCH_MS + 500 * steps
         } else if has(Merchant) {
-            INGREDIENT_SWITCH_SECONDS
+            INGREDIENT_SWITCH_MS
         } else if has(Charge) || has(Achievement) || has(Growing) {
-            0.0
+            0
         } else {
-            RECIPE_SWITCH_SECONDS + crafting_station(1.0)
+            RECIPE_SWITCH_MS + crafting_station(1_000)
         }
     }
 

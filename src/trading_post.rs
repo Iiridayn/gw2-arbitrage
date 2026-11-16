@@ -4,7 +4,7 @@ use crate::api;
 use crate::crafting::{Purchases, Source::TradingPost};
 use crate::item::ITEM_STACK_SIZE;
 use crate::money::Money;
-use crate::recipe::{Discipline::MysticForge, Recipe, INGREDIENT_SWITCH_SECONDS};
+use crate::recipe::{Discipline::MysticForge, Recipe, INGREDIENT_SWITCH_MS};
 
 const SPARKLINE_SLICES: usize = 8;
 const SPARKLINE_BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -35,15 +35,16 @@ pub fn market_seconds(purchases: &Purchases, outputs: &[Output]) -> u32 {
             + sales.saturating_sub(SALES_BEFORE_COOLDOWN) as f64 * SALE_COOLDOWN_SECONDS
     };
     let mut sales_before = 0;
-    let mut seconds =
-        buys as f64 * TP_ACTION_SECONDS + purchases.len() as f64 * INGREDIENT_SWITCH_SECONDS;
+    let switching = (purchases.len() as u32 * INGREDIENT_SWITCH_MS) as f64 / 1000.0;
+    let mut seconds = buys as f64 * TP_ACTION_SECONDS + switching;
     for &(sales, sold, ref output) in outputs.iter().filter(|(_, sold, _)| *sold > 0) {
         let selling = pace(sales_before + sales) - pace(sales_before);
         sales_before += sales;
-        let output_crafting: f64 = output
+        let output_crafting: u32 = output
             .iter()
-            .map(|&(recipe, batches)| recipe.crafting_seconds(batches))
+            .map(|&(recipe, batches)| recipe.crafting_ms(batches))
             .sum();
+        let output_crafting = output_crafting as f64 / 1000.0;
         // the Mystic Forge crafts one at a time, so only the last sale must wait
         let forged = output
             .iter()
@@ -125,9 +126,9 @@ impl ItemListings {
         Some(min_buy)
     }
 
-    /// The totals of the transactions selling up to `count` into buy orders, best price first,
-    /// without selling; a transaction is at most a stack at one price
-    pub fn sale_transactions(&self, mut count: u32) -> Vec<Money> {
+    /// The count and total of each transaction selling up to `count` into buy orders, best price
+    /// first, without selling; a transaction is at most a stack at one price
+    pub fn sale_transactions(&self, mut count: u32) -> Vec<(u32, Money)> {
         let mut transactions = vec![];
         // buys are sorted in ascending price
         for listing in self.buys.iter().rev() {
@@ -135,7 +136,10 @@ impl ItemListings {
             count -= sold;
             while sold > 0 {
                 let stack = sold.min(ITEM_STACK_SIZE);
-                transactions.push(Money::from_copper((stack * listing.unit_price) as i32));
+                transactions.push((
+                    stack,
+                    Money::from_copper((stack * listing.unit_price) as i32),
+                ));
                 sold -= stack;
             }
         }
@@ -145,7 +149,9 @@ impl ItemListings {
     /// Revenue from selling up to `count` into buy orders, after the fees on each transaction
     pub fn sale_revenue(&self, count: u32) -> Money {
         let transactions = self.sale_transactions(count).into_iter();
-        transactions.map(Money::trading_post_sale_revenue).sum()
+        transactions
+            .map(|(_, total)| total.trading_post_sale_revenue())
+            .sum()
     }
 
     /// Quantity left at the lowest sell price, after pending buys

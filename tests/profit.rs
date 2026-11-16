@@ -9,8 +9,11 @@ use gw2_arbitrage::{
     custom_recipes,
     item::Item,
     money::Money,
-    profit::{calculate_capped_profit, calculate_crafting_profit, ProfitableItem, Sale},
+    profit::{
+        calculate_capped_profit, calculate_crafting_profit, leftover_sale, ProfitableItem, Sale,
+    },
     recipe::{Discipline, Recipe},
+    trading_post,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -168,6 +171,20 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
             }],
             crafting_cost,
             profit: revenue + calc_revenue(vec![(5, 148)]) - crafting_cost,
+            // a transaction per sale: 5% listing fees, and 10% exchange fees from the payout
+            money_required: crafting_cost + Money::from_copper(399111 + 399110),
+            payout: Some(Money::from_copper(7982220 - 798222 + 7982200 - 798220)),
+            // 5 into buy orders at 148, 629 after fees; the 178 left after the 120 bought lists
+            // for 151 after fees; 748 / 5 marked up for fees breaks even
+            leftover_sales: HashMap::from([(
+                reagent_id,
+                (
+                    5,
+                    Some(Money::from_copper(126)),
+                    Some(Money::from_copper(151)),
+                    Money::from_copper(177),
+                ),
+            )]),
             crafting_steps: 6,
             crafting_seconds: 2,
             // 2 TP buys, 3 ingredients, output, 2 sales
@@ -181,7 +198,7 @@ fn calculate_crafting_profit_agony_infusion_profitable_test() {
             purchases: HashMap::from([
                 ((reagent_id, TradingPost), bought(1, 120, 120, 120)),
                 // the vendor's minimum purchase
-                ((reagent_id, Vendor), bought(10, 0, 0, 0)),
+                ((reagent_id, Vendor), bought(10, 0, 0, 1496)),
                 (
                     (plus_14_id, TradingPost),
                     bought(8, 800000, 1100000, 8300000)
@@ -234,6 +251,10 @@ fn calculate_crafting_profit_with_output_item_count_test() {
     ]);
     // every case sells into all 98 buy orders, a transaction per price
     let revenue = calc_revenue(vec![(47, 198), (50, 199), (1, 200)]);
+    // those transactions are 9306, 9950 and 200: 5% listing fees from the wallet, halves rounded
+    // up, and 10% exchange fees from the payout
+    let listing_fees = Money::from_copper(465 + 498 + 10);
+    let payout = Some(Money::from_copper(9306 - 931 + 9950 - 995 + 200 - 20));
     use crafting::Source::TradingPost;
     // the cheapest 2 of 1234 and 1 of 1235
     let one_batch = || {
@@ -270,6 +291,10 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             }],
             crafting_cost,
             profit: revenue - crafting_cost,
+            money_required: crafting_cost + listing_fees,
+            payout,
+            // nothing to sell into or list under; 2 marked up for fees, at least 2 more
+            leftover_sales: HashMap::from([(item_id, (0, None, None, Money::from_copper(4)))]),
             crafting_steps: 1,
             crafting_seconds: 1,
             // 2 ingredients, output, 3 price levels
@@ -314,6 +339,9 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             }],
             crafting_cost,
             profit: revenue - crafting_cost,
+            money_required: crafting_cost + listing_fees,
+            payout,
+            leftover_sales: HashMap::new(),
             crafting_steps: 1,
             crafting_seconds: 1,
             // 2 ingredients, output, 3 price levels
@@ -352,6 +380,10 @@ fn calculate_crafting_profit_with_output_item_count_test() {
             }],
             crafting_cost,
             profit: revenue - crafting_cost,
+            money_required: crafting_cost + listing_fees,
+            payout,
+            // 77 marked up for fees
+            leftover_sales: HashMap::from([(item_id, (0, None, None, Money::from_copper(91)))]),
             crafting_steps: 33,
             crafting_seconds: 1,
             // 2 ingredients, output, 3 price levels
@@ -639,6 +671,21 @@ fn calculate_crafting_profit_with_subitem_leftovers() {
             crafting_cost,
             // the leftover sells for its cost
             profit: revenue + leftover_cost - crafting_cost,
+            // the sales' transactions are 7750 and 200: 5% listing fees, halves rounded up, and
+            // 10% exchange fees from the payout
+            money_required: crafting_cost + Money::from_copper(388 + 10),
+            payout: Some(Money::from_copper(7750 - 775 + 200 - 20)),
+            // into the buy order at 100, 85 after fees; the 15 and 21 listings were bought, so the
+            // 31 left lists for 26 after fees; 30 marked up for fees breaks even
+            leftover_sales: HashMap::from([(
+                2100,
+                (
+                    1,
+                    Some(Money::from_copper(85)),
+                    Some(Money::from_copper(26)),
+                    Money::from_copper(36),
+                ),
+            )]),
             crafting_steps: 59,
             crafting_seconds: 2,
             // 3 ingredients, output, 2 price levels
@@ -1153,6 +1200,27 @@ fn calculate_crafting_profit_buys_sub_ingredient_at_or_below_crafting_cost() {
 fn calculate_crafting_profit_keeps_crafting_cheaper_sub_ingredient_with_vendor_leftovers() {
     assert_eq!(campfire_treat_bowls(33), 80);
     assert_eq!(silk_insignia_patches(601), 20);
+}
+
+#[test]
+fn leftover_sale_vendors_what_the_buy_orders_pay_less_for() {
+    let listings = api_listings(vec![(1, vec![(20, 10), (3, 100)], vec![])]);
+    let listings = trading_post::ItemListings::from(listings[&1].clone());
+    let item = Item::mock(1, "Leftover", 4);
+    // the 10 at 20c pay 170c after fees, more than 40c vendored; the next 20 at 3c pay 51c, less
+    // than 80c vendored
+    let copper = Money::from_copper;
+    let sale = leftover_sale(30, Some(&listings), Some(&item));
+    assert_eq!(sale, (10, copper(170), copper(170 + 80)));
+    // with no buy orders, all are vendored
+    let sale = leftover_sale(30, None, Some(&item));
+    assert_eq!(sale, (0, copper(0), copper(120)));
+    // and none of those vendors won't buy
+    let item = r#"{"id": 1, "name": "Leftover", "vendor_value": 4, "type": "Armor",
+        "rarity": "Junk", "level": 0, "flags": ["NoSell"], "restrictions": []}"#;
+    let item: Item = serde_json::from_str(item).unwrap();
+    let sale = leftover_sale(30, Some(&listings), Some(&item));
+    assert_eq!(sale, (30, copper(170 + 51), copper(170 + 51)));
 }
 
 /// An item that unlocks `recipe_id`

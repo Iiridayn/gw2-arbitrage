@@ -1,5 +1,6 @@
 use std::fmt;
 
+use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 
 use strum::Display;
@@ -178,6 +179,20 @@ pub enum ItemConsumableType {
 }
 
 impl Item {
+    /// What a vendor pays for one; nothing for those vendors won't buy
+    pub fn vendor_sale_value(&self) -> Money {
+        if self.flags.contains(&Flag::NoSell) {
+            Money::zero()
+        } else {
+            Money::from_copper(self.vendor_value as i32)
+        }
+    }
+
+    /// The cost of a lot bought from a vendor, at its price or in tokens' value, and the items in it
+    pub fn vendor_lot(&self) -> Option<(Money, u32)> {
+        self.vendor_cost().or_else(|| self.token_value())
+    }
+
     /// Output is cost of a lot, items in a lot
     pub fn vendor_cost(&self) -> Option<(Money, u32)> {
         // standard vendor sell price is generally buy price * 8, see:

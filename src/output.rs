@@ -1,4 +1,5 @@
 use colored::Colorize;
+use num_traits::Zero;
 use serde::Serialize;
 
 use std::cmp::Reverse;
@@ -47,6 +48,8 @@ pub fn print_profitable_item(
         profitable_item.profit_per_hour(),
         (profitable_item.profit_on_cost() * 100_f64).round(),
     );
+    // the overview here, and the details where each is sold, after its item's last step
+    let mut sell_lines = HashMap::new();
     for sale in &sales {
         let price_msg = price_range(sale.max_sell, sale.min_sell);
         // --value replaces the buy orders, so they say nothing about this sale
@@ -59,39 +62,25 @@ pub fn print_profitable_item(
             }
             _ => String::new(),
         };
-        println!(
-            "Sell {} x {} at: {}{}, Breakeven price: {}, Profit: {}",
+        let sell = format!(
+            "Sell {} x {} at: {}{}",
             sale.count,
             name(&sale.id),
             price_msg,
-            sale_sparkline,
-            sale.breakeven,
-            Money::from_copper(sale.profit.to_copper_value()),
+            sale_sparkline
         );
+        let profit = Money::from_copper(sale.profit.to_copper_value());
+        println!("{}, Profit: {}", sell, profit);
+        let line = format!("{}, Breakeven price: {}", sell, sale.breakeven);
+        let last_step = sorted.iter().rposition(|&(id, ..)| id == sale.id);
+        sell_lines.insert(last_step.expect("Missing step for a sale"), line);
     }
-    // fees are charged on each transaction's total, and the listing fee is paid from the wallet
-    let sales_on_tp = sales.iter().filter(|_| CONFIG.crafting.value.is_none());
-    let transactions: Vec<Money> = sales_on_tp
-        .flat_map(|sale| {
-            let listings = trading_post::ItemListings::from(api_listings[&sale.id].clone());
-            listings.sale_transactions(sale.count)
-        })
-        .collect();
-    let listing_fees: Money = transactions
-        .iter()
-        .map(|total| total.trading_post_listing_fee())
-        .sum();
-    let money_required = profitable_item.crafting_cost + listing_fees;
-    match CONFIG.crafting.value {
-        None => println!(
+    match profitable_item.payout {
+        Some(payout) => println!(
             "Money Required: {}, TP pays out: {}",
-            money_required,
-            transactions
-                .iter()
-                .map(|total| total.trading_post_payout())
-                .sum::<Money>()
+            profitable_item.money_required, payout
         ),
-        Some(_) => println!("Money Required: {}", money_required),
+        None => println!("Money Required: {}", profitable_item.money_required),
     }
 
     let bought = steps::bought_steps(&sorted);
@@ -107,7 +96,14 @@ pub fn print_profitable_item(
             sale.count, sale.id
         );
     }
-    print_crafting_steps(&sorted, &step_groups, &labels, &bought, game_data);
+    print_crafting_steps(
+        &sorted,
+        &step_groups,
+        &labels,
+        &bought,
+        &sell_lines,
+        game_data,
+    );
 
     // nothing unlocks these, or nothing that does could be bought or crafted
     let unpriced: Vec<String> = sorted
@@ -119,6 +115,10 @@ pub fn print_profitable_item(
         })
         .map(|&(id, .., recipe)| format!("{} (recipe {})", name(&id), recipe.id.unwrap()))
         .collect();
+    let unmade = || profitable_item.sales.iter().filter(|sale| sale.count == 0);
+    if !unpriced.is_empty() || !crafted_items.leftovers.is_empty() || unmade().next().is_some() {
+        println!("============");
+    }
     if !unpriced.is_empty() {
         println!(
             "Not in the cost, as nothing that unlocks them could be priced; learn these recipes first: {}",
@@ -126,8 +126,8 @@ pub fn print_profitable_item(
         );
     }
 
-    print_leftovers(profitable_item, api_listings, game_data);
-    for sale in profitable_item.sales.iter().filter(|sale| sale.count == 0) {
+    print_leftovers(profitable_item, game_data);
+    for sale in unmade() {
         println!("Not made: {}: {}", name(&sale.id), sale.stop);
     }
 
@@ -135,11 +135,7 @@ pub fn print_profitable_item(
 }
 
 /// What's left over, with what it sells for, after the profit their sale adds
-fn print_leftovers(
-    profitable_item: &profit::ProfitableItem,
-    api_listings: &HashMap<u32, api::ItemListings>,
-    game_data: &crafting::GameData,
-) {
+fn print_leftovers(profitable_item: &profit::ProfitableItem, game_data: &crafting::GameData) {
     let leftovers = &profitable_item.crafted_items.leftovers;
     if leftovers.is_empty() {
         return;
@@ -151,34 +147,29 @@ fn print_leftovers(
     }
     let mut leftovers: Vec<_> = leftovers.iter().collect();
     leftovers.sort_unstable_by_key(|&(&id, _)| id);
-    for (&leftover_id, &(count, cost, _)) in leftovers {
+    for (&leftover_id, &(count, ..)) in leftovers {
+        let (on_tp, sells, lists, breakeven) = profitable_item.leftover_sales[&leftover_id];
         // after fees: sold into the buy orders now, or listed at the lowest sell
-        let market = api_listings
-            .get(&leftover_id)
-            .map_or_else(String::new, |listings| {
-                let wanted: u32 = listings.buys.iter().map(|b| b.quantity).sum();
-                let sold = wanted.min(count);
-                let revenue =
-                    || trading_post::ItemListings::from(listings.clone()).sale_revenue(sold);
-                let sells = (sold > 0).then(|| revenue() / sold);
-                let listing = listings.sells.last();
-                let lowest = listing.map(|l| Money::from_copper(l.unit_price as i32));
-                let lists = lowest.map(Money::trading_post_sale_revenue);
-                match (sells, lists) {
-                    (Some(sells), Some(lists)) => {
-                        format!(", sells for {} to {} each", sells, lists)
-                    }
-                    (Some(sells), None) => format!(", sells for {} each", sells),
-                    (None, Some(lists)) => format!(", lists for {} each", lists),
-                    (None, None) => String::new(),
-                }
-            });
+        let market = match (sells, lists) {
+            (Some(sells), Some(lists)) => format!(", sells for {} to {} each", sells, lists),
+            (Some(sells), None) => format!(", sells for {} each", sells),
+            (None, Some(lists)) => format!(", lists for {} each", lists),
+            (None, None) => String::new(),
+        };
+        let item = game_data.items.get(&leftover_id);
+        let vendor = item.map_or(Money::zero(), |item| item.vendor_sale_value());
+        let vendored = match count - on_tp {
+            0 => String::new(),
+            _ if vendor.is_zero() => String::new(),
+            vendored => format!(", vendor {} for {} each", vendored, vendor),
+        };
         println!(
-            "{} {}, breakeven: {} each{}",
+            "{} {}, breakeven: {} each{}{}",
             count,
             game_data.item_name(leftover_id),
-            (cost / count).trading_post_listing_price(),
+            breakeven,
             market,
+            vendored,
         );
     }
 }
@@ -212,20 +203,24 @@ fn print_shopping_list(
                 let price = price_range(ingredient.min_price, ingredient.max_price);
                 let subtotal = ingredient.total_cost;
                 let msg = format!(" (at {}) Subtotal: {} {}", price, subtotal, sparkline);
-                (ITEM_STACK_SIZE, msg)
+                // equal stacks when the count allows, without another transaction
+                let stacks = ingredient.count.div_ceil(ITEM_STACK_SIZE);
+                match ingredient.count % stacks {
+                    0 => (ingredient.count / stacks, msg),
+                    _ => (ITEM_STACK_SIZE, msg),
+                }
             }
             Vendor => {
                 let item = game_data.items.get(&ingredient_id);
                 let missing = || panic!("Missing item for ingredient {}", ingredient_id);
                 let item = item.unwrap_or_else(missing);
-                match item.vendor_cost() {
+                let subtotal = ingredient.total_cost;
+                match item.vendor_lot() {
                     Some((cost, lot)) if lot > 1 => {
-                        let subtotal = cost * ingredient.count.div_ceil(lot);
                         let msg = format!(" (vendor: {} per {}) Subtotal: {}", cost, lot, subtotal);
                         (lot, msg)
                     }
                     Some((cost, lot)) => {
-                        let subtotal = cost * ingredient.count;
                         (lot, format!(" (vendor: {}) Subtotal: {}", cost, subtotal))
                     }
                     None => (1, String::new()),
@@ -275,18 +270,28 @@ fn count_in_lots(count: u32, lot: u32) -> (String, u32) {
     }
 }
 
-/// The steps not bought, under the stations they're crafted at
+/// The steps not bought, under the stations they're crafted at, each sale after its item's last step
 fn print_crafting_steps(
     steps: &[(u32, u32, &Recipe)],
     step_groups: &[Option<usize>],
     labels: &[String],
     bought: &[bool],
+    sell_lines: &HashMap<usize, String>, // step index, the sale made after it
     game_data: &crafting::GameData,
 ) {
-    use Discipline::{DoubleClick, Salvage};
+    use Discipline::{DoubleClick, Merchant, Salvage};
+    let print_sale = |index| {
+        if let Some(line) = sell_lines.get(&index) {
+            println!("{}", line);
+        }
+    };
     let mut current = None;
-    let steps = steps.iter().zip(step_groups).zip(bought);
-    for ((&(item_id, count, recipe), &group), _) in steps.filter(|(_, &bought)| !bought) {
+    let steps = steps.iter().zip(step_groups).zip(bought).enumerate();
+    for (index, ((&(item_id, count, recipe), &group), &bought)) in steps {
+        if bought {
+            print_sale(index);
+            continue;
+        }
         if let Some(group) = group {
             let label = &labels[group];
             match current {
@@ -300,6 +305,8 @@ fn print_crafting_steps(
             "Salvage "
         } else if recipe.disciplines.contains(&DoubleClick) {
             "Double click "
+        } else if recipe.disciplines.contains(&Merchant) {
+            "Buy "
         } else {
             ""
         };
@@ -314,6 +321,7 @@ fn print_crafting_steps(
         } else {
             println!("{}{} {} from {}", action, count, item_name, ingredients);
         }
+        print_sale(index);
     }
 }
 

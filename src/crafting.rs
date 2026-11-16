@@ -12,7 +12,7 @@ use num_traits::Zero;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Logging out and in to use another character's crafting disciplines
-const CHARACTER_SWITCH_SECONDS: f64 = 30.0;
+const CHARACTER_SWITCH_MS: u32 = 30_000;
 
 #[derive(Debug, Copy, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Source {
@@ -128,7 +128,7 @@ pub fn lower_bounds(
         smallest
     };
     for item in ids.clone().filter_map(|id| game_data.items.get(&id)) {
-        if let Some((lot_cost, lot_size)) = item.vendor_cost().or_else(|| item.token_value()) {
+        if let Some((lot_cost, lot_size)) = item.vendor_lot() {
             let bound = per_item(lot_cost, lot_size);
             let entry = lower_bounds.entry(item.id).or_insert(bound);
             *entry = (*entry).min(bound);
@@ -194,13 +194,11 @@ pub fn calculate_estimated_min_crafting_cost(
         .filter(|price| price.sells.quantity > 0)
         .map(|price| Money::from_copper(price.sells.unit_price as i32) * count);
 
-    let vendor_cost = item
-        .and_then(|item| item.vendor_cost().or_else(|| item.token_value()))
-        .map(|(lot_cost, lot_size)| {
-            let lots = count.div_ceil(lot_size);
-            let (share, _leftovers) = (lot_cost * lots).split(count, lots * lot_size);
-            share
-        });
+    let vendor_cost = item.and_then(Item::vendor_lot).map(|(lot_cost, lot_size)| {
+        let lots = count.div_ceil(lot_size);
+        let (share, _leftovers) = (lot_cost * lots).split(count, lots * lot_size);
+        share
+    });
 
     let recipes = game_data
         .recipes
@@ -284,7 +282,7 @@ pub struct PreciseCraftingCostContext {
     pub purchases: Vec<(u32, u32, Source)>, // id, count, Source
     pub items: CraftedItems,
     pub being_crafted: Vec<u32>, // outermost first
-    pub seconds: f64,            // crafting, for ties between recipes
+    pub crafting_ms: u32,        // for ties between recipes
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
@@ -315,18 +313,18 @@ impl CraftedItems {
         item_ids: &[u32],
         recipes_map: &HashMap<u32, Vec<Recipe>>,
     ) -> f64 {
-        let crafting: f64 = self
+        let crafting: u32 = self
             .crafted
             .iter()
             .map(|(&(item_id, index), &count)| {
                 let recipe = &recipes_map[&item_id][index];
-                recipe.crafting_seconds(count / recipe.output_item_count)
+                recipe.crafting_ms(count / recipe.output_item_count)
             })
             .sum();
         let step_groups = steps::discipline_groups(&mut self.sorted(item_ids, recipes_map), self);
         let groups: Vec<usize> = step_groups.into_iter().flatten().collect();
-        let switches = groups.windows(2).filter(|w| w[0] != w[1]).count();
-        crafting + switches as f64 * CHARACTER_SWITCH_SECONDS
+        let switches = groups.windows(2).filter(|w| w[0] != w[1]).count() as u32;
+        (crafting + switches * CHARACTER_SWITCH_MS) as f64 / 1000.0
     }
 
     pub fn unknown_recipes(
@@ -395,7 +393,7 @@ pub fn price_one_more(
         purchases: vec![],
         items: items.clone(),
         being_crafted: vec![],
-        seconds: 0.0,
+        crafting_ms: 0,
     };
     let priced = calculate_precise_min_crafting_cost(
         item_id,
@@ -490,7 +488,7 @@ fn price_from_one_source(
 
     // this count's share of the whole lots bought, and those lots' cost and count
     let (vendor_cost, vendor_lots) = item
-        .and_then(|item| item.vendor_cost().or_else(|| item.token_value()))
+        .and_then(Item::vendor_lot)
         .map(|(lot_cost, lot_size)| {
             let lots = item_count.div_ceil(lot_size);
             let (cost, count) = (lot_cost * lots, lots * lot_size);
@@ -514,8 +512,8 @@ fn price_from_one_source(
     // the start every recipe is priced from
     let purchases_start = context.purchases.len();
     let start = context.clone();
-    // (share, seconds, index), batches' cost, state
-    let mut best: Option<((Money, f64, usize), Money, PreciseCraftingCostContext)> = None;
+    // (share, ms, index), batches' cost, state
+    let mut best: Option<((Money, u32, usize), Money, PreciseCraftingCostContext)> = None;
     context.being_crafted.push(item_id);
     for (index, recipe) in tried {
         let batches = item_count.div_ceil(recipe.output_item_count);
@@ -555,8 +553,8 @@ fn price_from_one_source(
         // its crafting time: only the extra batches if it's already in the plan
         let done = context.items.crafted.get(&(item_id, index));
         let done = done.map(|count| count / recipe.output_item_count);
-        let spent = done.map_or(0.0, |done| recipe.crafting_seconds(done));
-        context.seconds += recipe.crafting_seconds(done.unwrap_or(0) + batches) - spent;
+        let spent = done.map_or(0, |done| recipe.crafting_ms(done));
+        context.crafting_ms += recipe.crafting_ms(done.unwrap_or(0) + batches) - spent;
         // and each thing not already on the shopping list must be found and bought
         let (before, bought) = context.purchases.split_at(purchases_start);
         let shopping = bought.iter().enumerate().filter(|&(i, &(id, _, source))| {
@@ -565,14 +563,14 @@ fn price_from_one_source(
             };
             !before.iter().any(same) && !bought[..i].iter().any(same)
         });
-        let shopping = shopping.count() as f64 * recipe::INGREDIENT_SWITCH_SECONDS;
-        let seconds = context.seconds - start.seconds + shopping;
+        let shopping = shopping.count() as u32 * recipe::INGREDIENT_SWITCH_MS;
+        let ms = context.crafting_ms - start.crafting_ms + shopping;
 
-        // back to the start, keeping this attempt if it beats the best on (share, seconds, index)
+        // back to the start, keeping this attempt if it beats the best on (share, ms, index)
         let attempt = restore(context, listings, purchases_start, start.clone());
         if let Some(cost) = cost {
             let (share, _) = cost.split(item_count, output_count);
-            let key = (share, seconds, index);
+            let key = (share, ms, index);
             if best.as_ref().is_none_or(|(best_key, ..)| key < *best_key) {
                 best = Some((key, cost, attempt));
             }
