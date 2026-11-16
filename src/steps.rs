@@ -157,7 +157,8 @@ pub fn discipline_groups(
     }
 
     // Working back from the last step, take the latest step whose output is no
-    // longer needed, as an ingredient or to learn a recipe, preferring the current group
+    // longer needed, as an ingredient or to learn a recipe, preferring the current group, then a
+    // group that can be finished now, without coming back to it
     let mut remaining: Vec<usize> = (0..steps.len()).collect();
     let mut order = vec![];
     let mut current = None;
@@ -176,9 +177,16 @@ pub fn discipline_groups(
             remaining.iter().any(uses)
         };
         let ready = || remaining.iter().rev().copied().filter(|&i| !used(i));
+        let group_ready = |i: usize| {
+            let mut group = remaining
+                .iter()
+                .filter(|&&j| step_groups[j] == step_groups[i]);
+            group.all(|&j| !used(j))
+        };
         // items in a loop use each other's outputs, so none is ready; take the latest step
         let pick = ready()
-            .find(|&i| current.is_none() || step_groups[i].is_none() || step_groups[i] == current)
+            .find(|&i| step_groups[i].is_none() || step_groups[i] == current)
+            .or_else(|| ready().find(|&i| group_ready(i)))
             .or_else(|| ready().next())
             .unwrap_or(*remaining.last().unwrap());
         current = step_groups[pick].or(current);

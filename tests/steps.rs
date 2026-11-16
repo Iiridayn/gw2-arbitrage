@@ -123,6 +123,23 @@ fn mystic_forge_steps_are_done_in_one_visit() {
 }
 
 #[test]
+fn group_with_parts_left_is_switched_to_last() {
+    // 1 (Weaponsmith) and 2 (Huntsman) each take the Huntsman part 3
+    let recipes = [
+        recipe(1, [Weaponsmith], 400, &[3]),
+        recipe(2, [Huntsman], 400, &[3]),
+        recipe(3, [Huntsman], 400, &[]),
+    ];
+    let mut steps: Vec<_> = [3, 1, 2]
+        .iter()
+        .map(|&id| (id, 1, &recipes[id as usize - 1]))
+        .collect();
+    steps::discipline_groups(&mut steps, &Default::default());
+    let ids: Vec<_> = steps.iter().map(|step| step.0).collect();
+    assert_eq!(ids, [3, 2, 1]);
+}
+
+#[test]
 fn steps_learn_a_recipe_before_using_it() {
     // item 1's recipe is learned from item 50, made at the Mystic Forge; item 1 takes more, so
     // it's sorted first
