@@ -954,7 +954,7 @@ fn valued_high(
     api_listings: &HashMap<u32, ItemListings>,
 ) -> ProfitableItem {
     let opt = CraftingOptions {
-        value: Some(100000),
+        value: Some(Some(100000)),
         count: Some(count),
         ..Default::default()
     };
@@ -1135,7 +1135,7 @@ fn calculate_crafting_profit_buys_at_the_price_listed_before_a_losing_promotion(
         (2, vec![], vec![(100, 1000)]),
     ]);
     let opt = CraftingOptions {
-        value: Some(100000),
+        value: Some(Some(100000)),
         count: Some(1),
         ..Default::default()
     };
@@ -1249,7 +1249,7 @@ fn unknown_recipe(ingredients: &[RecipeIngredient], recipes: Vec<Recipe>) -> Gam
 /// One of item 1, valued high, knowing no recipes
 fn one_valued_high<T>(calculate: impl FnOnce(&HashSet<u32>, &CraftingOptions) -> T) -> T {
     let opt = CraftingOptions {
-        value: Some(100000),
+        value: Some(Some(100000)),
         count: Some(1),
         ..Default::default()
     };
@@ -1406,7 +1406,7 @@ fn calculate_capped_profit_buys_rather_than_craft_when_the_time_costs_more_than_
     ]);
     let crafted = |min_per_hour| {
         let opt = CraftingOptions {
-            value: Some(100000),
+            value: Some(Some(100000)),
             count: Some(1),
             min_per_hour,
             ..Default::default()

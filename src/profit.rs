@@ -169,7 +169,7 @@ fn plan_score(profit: Money, seconds: impl FnOnce() -> f64, opt: &config::Crafti
 fn is_worth_crafting(item: &ProfitableItem) -> bool {
     let mut unlocks = item.crafted_items.unlocks.values().flatten();
     // costs no more than the plan the profit loop accepted, so its checks stand
-    if unlocks.all(|(_, cost)| cost.is_zero()) {
+    if CONFIG.crafting.value == Some(None) || unlocks.all(|(_, cost)| cost.is_zero()) {
         return true;
     }
     let min_rate = CONFIG
@@ -295,7 +295,10 @@ pub fn calculate_crafting_profit(
     };
     // what one more adds to the sales after fees, and the buy order it fills
     let sale_price = |listings: &BTreeMap<u32, ItemListings>, sale: &Sale| match opt.value {
-        Some(price) => Some((Money::from_copper(price as i32), price)),
+        Some(price) => Some((
+            Money::from_copper(price.unwrap_or(0) as i32),
+            price.unwrap_or(0),
+        )),
         None => {
             let top = listings.get(&sale.id)?.buys.last()?;
             let revenue = |count| unsold[&sale.id].sale_revenue(count);
@@ -321,7 +324,7 @@ pub fn calculate_crafting_profit(
         .iter()
         .map(|&id| {
             let max_sell = listings.get(&id).map_or_else(
-                || opt.value.unwrap_or(0),
+                || opt.value.flatten().unwrap_or(0),
                 |item_listings| item_listings.buys.last().map_or(0, |l| l.unit_price),
             );
             Sale {
@@ -364,7 +367,7 @@ pub fn calculate_crafting_profit(
                     "too close to its sale price for --min-per-item"
                 };
                 let stop = format!("Crafting costs {} each, {} ({} each)", cost, why, buy_price);
-                (buy_price < cost + min_profit).then_some(stop)
+                (opt.value != Some(None) && buy_price < cost + min_profit).then_some(stop)
             };
             let wins = |cost: Money| {
                 best.as_ref()
@@ -483,7 +486,14 @@ pub fn calculate_crafting_profit(
 
     // Stop each item where its share of the score peaked, after selling leftovers and, with
     // --min-per-hour, the time spent
-    let peaks: Vec<u32> = gains.iter().map(|&(.., count)| count).collect();
+    let peaks: Vec<u32> = if opt.value == Some(None) {
+        if let Some(sale) = sales.iter().find(|sale| Some(sale.count) < opt.count) {
+            return Err(format!("{}: {}", game_data.item_name(sale.id), sale.stop));
+        }
+        sales.iter().map(|sale| sale.count).collect()
+    } else {
+        gains.iter().map(|&(.., count)| count).collect()
+    };
     if peaks.iter().all(|&count| count == 0) {
         return Err(if crafting_count > 0 {
             "Not profitable after charging leftovers or --min-per-hour".to_string()

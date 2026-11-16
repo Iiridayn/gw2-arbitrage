@@ -27,7 +27,7 @@ pub struct CraftingOptions {
     pub count: Option<u32>, // of each item
     pub min_per_item: Option<u32>,
     pub min_per_hour: Option<u32>,
-    pub value: Option<u32>,
+    pub value: Option<Option<u32>>,
     pub caps: HashMap<(u32, usize), u32>, // (id, recipe index), most it may make
     pub item_caps: HashMap<u32, u32>, // most of each item asked for; set by the rerun, not a flag
 }
@@ -72,10 +72,10 @@ impl Config {
 
         let opt = Opt::from_args();
 
-        config.crafting.count = opt.count;
+        config.crafting.count = opt.count.or(opt.cost.then_some(1));
         config.crafting.min_per_item = opt.min_per_item;
         config.crafting.min_per_hour = opt.min_per_hour;
-        config.crafting.value = opt.value;
+        config.crafting.value = opt.value.map(Some).or(opt.cost.then_some(None));
 
         config.output_csv = opt.output_csv;
 
@@ -250,6 +250,10 @@ struct Opt {
     /// Calculate profit based on a fixed value instead of from buy orders
     #[structopt(long)]
     value: Option<u32>,
+
+    /// The cheapest way to get --count (default 1) of each item, whose cost is minus the profit
+    #[structopt(long, conflicts_with = "value")]
+    cost: bool,
 
     /// Minimum profit per item in copper, for every item made
     #[structopt(long)]

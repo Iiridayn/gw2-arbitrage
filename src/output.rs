@@ -50,7 +50,7 @@ pub fn print_profitable_item(
     );
     // the overview here, and the details where each is sold, after its item's last step
     let mut sell_lines = HashMap::new();
-    for sale in &sales {
+    for sale in sales.iter().filter(|_| CONFIG.crafting.value != Some(None)) {
         let price_msg = price_range(sale.max_sell, sale.min_sell);
         // --value replaces the buy orders, so they say nothing about this sale
         let sale_sparkline = match api_listings.get(&sale.id) {
