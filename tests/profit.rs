@@ -1144,6 +1144,60 @@ fn calculate_crafting_profit_buys_at_the_price_listed_before_a_losing_promotion(
     assert_eq!(profitable_item.crafting_cost, Money::from_copper(10));
 }
 
+/// With --cost, of `count` of `item_ids`, cheapest in all or each to `count`
+fn cost(
+    item_ids: &[u32],
+    count: u32,
+    cheapest: bool,
+    game_data: &GameData,
+    api_listings: &HashMap<u32, ItemListings>,
+) -> Result<ProfitableItem, String> {
+    let opt = CraftingOptions {
+        value: Some(None),
+        count: Some(count),
+        cheapest,
+        ..Default::default()
+    };
+    calculate_crafting_profit(item_ids, game_data, api_listings, None, &opt)
+}
+
+#[test]
+fn calculate_crafting_profit_cost_buys_what_is_cheaper_to_buy_than_craft() {
+    let game_data = mock_game_data(&[], &[(1, 1, &[(2, 1)])]);
+    let api_listings = api_listings(vec![
+        (1, vec![], vec![(50, 1), (500, 1000)]),
+        (2, vec![], vec![(100, 1000)]),
+    ]);
+    let bought = cost(&[1], 1, false, &game_data, &api_listings).unwrap();
+    assert_eq!(bought.crafting_cost, Money::from_copper(50));
+    assert_eq!(bought.profit_per_crafting_step(), Money::from_copper(-50));
+    let profitable_item = cost(&[1], 2, false, &game_data, &api_listings).unwrap();
+    assert_eq!(profitable_item.crafting_cost, Money::from_copper(150));
+    let crafted = profitable_item.crafted_items.crafted;
+    assert_eq!(crafted, HashMap::from([((1, 0), 1)]));
+}
+
+#[test]
+fn calculate_crafting_profit_cheapest_takes_each_unit_from_the_cheapest_item() {
+    // 1 has no recipe and two cheap listings; 2 is crafted from one 3
+    let game_data = mock_game_data(&[], &[(2, 1, &[(3, 1)])]);
+    let listings = api_listings(vec![
+        (1, vec![], vec![(10, 2), (1000, 1000)]),
+        (3, vec![], vec![(20, 1000)]),
+    ]);
+    let profitable_item = cost(&[1, 2], 3, true, &game_data, &listings).unwrap();
+    let made: Vec<_> = profitable_item
+        .sales
+        .iter()
+        .map(|sale| (sale.id, sale.count))
+        .collect();
+    assert_eq!(made, vec![(1, 2), (2, 1)]);
+    assert_eq!(profitable_item.crafting_cost, Money::from_copper(40));
+
+    let too_few = api_listings(vec![(1, vec![], vec![(10, 2)])]);
+    assert!(cost(&[1], 3, true, &game_data, &too_few).is_err());
+}
+
 #[test]
 fn calculate_crafting_profit_makes_the_count_asked_for_from_part_of_a_batch() {
     let game_data = mock_game_data(

@@ -301,8 +301,7 @@ impl CraftedItems {
             .map(|(&(item_id, index), &count)| {
                 Ratio::new(count, recipes_map[&item_id][index].output_item_count)
             })
-            .reduce(|total, count| total + count)
-            .unwrap();
+            .sum::<Ratio<u32>>();
         debug_assert!(total_crafting_steps.is_integer());
         total_crafting_steps
     }

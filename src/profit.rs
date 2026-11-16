@@ -338,6 +338,12 @@ pub fn calculate_crafting_profit(
     // simulate crafting 1 item per loop iteration, of whichever profits most, until none does;
     // the rest of a batch is taken from leftovers
     loop {
+        if opt.cheapest && opt.count.is_some_and(|count| crafting_count >= count) {
+            for sale in sales.iter_mut().filter(|sale| sale.stop.is_empty()) {
+                sale.stop = "Others were cheaper".to_string();
+            }
+            break;
+        }
         // (profit, index, crafting cost, buy order filled, state)
         let mut best: Option<(Money, usize, Money, u32, _)> = None;
         // each item is priced again each round, as what another made may have changed its costs
@@ -351,7 +357,7 @@ pub fn calculate_crafting_profit(
                 sales[index].stop = "More don't pay after leftovers or --min-per-hour".to_string();
                 continue;
             }
-            if !game_data.recipes.contains_key(&item_id) {
+            if opt.value != Some(None) && !game_data.recipes.contains_key(&item_id) {
                 sales[index].stop = "No usable recipe; check -m, -u and the blacklists".to_string();
                 continue;
             }
@@ -392,6 +398,7 @@ pub fn calculate_crafting_profit(
                 opt,
             );
             let crafting_cost = match priced {
+                Some(crafting::PreciseCraftingCost { cost, .. }) if opt.value == Some(None) => cost,
                 Some(crafting::PreciseCraftingCost {
                     source: crafting::Source::Crafting,
                     cost,
@@ -487,8 +494,13 @@ pub fn calculate_crafting_profit(
     // Stop each item where its share of the score peaked, after selling leftovers and, with
     // --min-per-hour, the time spent
     let peaks: Vec<u32> = if opt.value == Some(None) {
-        if let Some(sale) = sales.iter().find(|sale| Some(sale.count) < opt.count) {
-            return Err(format!("{}: {}", game_data.item_name(sale.id), sale.stop));
+        let stop = |sale: &Sale| format!("{}: {}", game_data.item_name(sale.id), sale.stop);
+        if opt.cheapest {
+            if Some(crafting_count) < opt.count {
+                return Err(sales.iter().map(stop).collect::<Vec<_>>().join("\n"));
+            }
+        } else if let Some(sale) = sales.iter().find(|sale| Some(sale.count) < opt.count) {
+            return Err(stop(sale));
         }
         sales.iter().map(|sale| sale.count).collect()
     } else {
@@ -828,7 +840,7 @@ impl ProfitableItem {
     }
 
     pub fn profit_per_crafting_step(&self) -> Money {
-        self.profit / self.crafting_steps
+        self.profit / self.crafting_steps.max(1)
     }
 
     pub fn profit_per_hour(&self) -> Money {

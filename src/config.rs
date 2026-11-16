@@ -24,7 +24,8 @@ pub const CACHE_PREFIX: &str = "cache_";
 #[derive(Clone, Debug, Default)]
 pub struct CraftingOptions {
     pub include_timegated: bool,
-    pub count: Option<u32>, // of each item
+    pub count: Option<u32>, // of each item, or in all with cheapest
+    pub cheapest: bool,
     pub min_per_item: Option<u32>,
     pub min_per_hour: Option<u32>,
     pub value: Option<Option<u32>>,
@@ -72,10 +73,12 @@ impl Config {
 
         let opt = Opt::from_args();
 
-        config.crafting.count = opt.count.or(opt.cost.then_some(1));
+        let cost = opt.cost || opt.cheapest;
+        config.crafting.count = opt.count.or(cost.then_some(1));
+        config.crafting.cheapest = opt.cheapest;
         config.crafting.min_per_item = opt.min_per_item;
         config.crafting.min_per_hour = opt.min_per_hour;
-        config.crafting.value = opt.value.map(Some).or(opt.cost.then_some(None));
+        config.crafting.value = opt.value.map(Some).or(cost.then_some(None));
 
         config.output_csv = opt.output_csv;
 
@@ -254,6 +257,10 @@ struct Opt {
     /// The cheapest way to get --count (default 1) of each item, whose cost is minus the profit
     #[structopt(long, conflicts_with = "value")]
     cost: bool,
+
+    /// --cost of --count in all, each unit of whichever item is cheapest to get next
+    #[structopt(long, conflicts_with = "value")]
+    cheapest: bool,
 
     /// Minimum profit per item in copper, for every item made
     #[structopt(long)]
