@@ -494,6 +494,14 @@ pub fn print_item_list(
 
     let total_profit: Money = profitable_items.iter().map(|item| item.profit).sum();
     println!("Total: {}", total_profit);
+    println!(
+        "IDs: {}",
+        profitable_items
+            .iter()
+            .map(|item| item.sales[0].id.to_string())
+            .collect::<Vec<String>>()
+            .join(" ")
+    );
     if CONFIG.crafting.min_per_hour.is_some() {
         println!("Pass the same --min-per-hour with an item id for the same crafting steps");
     }
